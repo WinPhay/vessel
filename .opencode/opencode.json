@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/schema/opencode.json",
+  "version": "1.0",
+  "permissions": {
+    "file.read": "allow",
+    "file.write": "allow",
+    "command.execute": "allow",
+    "git.commit": "allow",
+    "git.push": "ask",
+    "git.push.force": "deny",
+    "command.destructive": "deny"
+  },
+  "defaultAgent": "coder",
+  "reviewerAgent": "reviewer"
+}
