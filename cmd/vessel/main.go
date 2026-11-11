@@ -5,7 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/WinPhay/vessel/internal/mcp"
 	"github.com/WinPhay/vessel/internal/sandbox"
 )
 
@@ -85,10 +88,36 @@ func runExec(args []string) {
 func runMCP(args []string) {
 	mcpFlags := flag.NewFlagSet("mcp", flag.ExitOnError)
 	workspace := mcpFlags.String("workspace", ".", "Host directory to mount into /workspace")
+	image := mcpFlags.String("image", "alpine:latest", "Docker container image to use")
+	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = mcpFlags.Parse(args)
 
-	fmt.Printf("[vessel] Starting MCP stdio server on workspace %s...\n", *workspace)
-	// Stdio MCP JSON-RPC loop wired in next milestone
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	var sb sandbox.Sandbox
+	cfg := sandbox.DefaultDockerConfig(*workspace)
+	if *image != "" {
+		cfg.ImageName = *image
+	}
+
+	if *useMock {
+		sb = sandbox.NewMockSandbox()
+	} else {
+		realSB, err := sandbox.NewDockerSandbox(ctx, cfg, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Failed to initialize Docker sandbox for MCP: %v\n", err)
+			fmt.Fprintln(os.Stderr, "[vessel] Tip: use --mock for testing without an active Docker daemon.")
+			os.Exit(1)
+		}
+		sb = realSB
+	}
+	defer sb.Close()
+
+	server := mcp.NewServer(sb, cfg.WorkspacePath, os.Stdin, os.Stdout)
+	if err := server.Serve(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] MCP server loop exited: %v\n", err)
+	}
 }
 
 func printUsage() {
@@ -100,7 +129,7 @@ func printUsage() {
 	fmt.Println("  exec      Execute a command inside the sandbox container")
 	fmt.Println("            Flags: --workspace <dir>, --image <image>")
 	fmt.Println("  mcp       Start stdio Model Context Protocol server")
-	fmt.Println("            Flags: --workspace <dir>")
+	fmt.Println("            Flags: --workspace <dir>, --image <image>, --mock")
 	fmt.Println("  version   Display version information")
 	fmt.Println("  help      Show this help text")
 }
