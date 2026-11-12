@@ -27,7 +27,13 @@ If you are an AI assistant or coding agent working in this repository, see [`AGE
 
 ## Quick Start
 
-### Build
+### Installation (One-Liner)
+Install the latest pre-compiled static binary for your OS and CPU architecture (Linux/macOS/Windows, amd64/arm64):
+```bash
+curl -fsSL https://raw.githubusercontent.com/WinPhay/vessel/main/scripts/install.sh | bash
+```
+
+### Build from Source
 ```bash
 go build -o bin/vessel ./cmd/vessel
 ```

@@ -27,7 +27,7 @@ func main() {
 	command := os.Args[1]
 	switch command {
 	case "version":
-		fmt.Printf("Vessel v%s (The local time-traveling sandbox engine)\n", Version)
+		fmt.Printf("Vessel v%s (The local time-traveling sandbox engine)\n", strings.TrimPrefix(Version, "v"))
 	case "mcp":
 		runMCP(os.Args[2:])
 	case "exec":
@@ -282,7 +282,7 @@ func runStatus(args []string) {
 }
 
 func printUsage() {
-	fmt.Printf("Vessel v%s — Local AI Agent Sandbox Engine\n\n", Version)
+	fmt.Printf("Vessel v%s — Local AI Agent Sandbox Engine\n\n", strings.TrimPrefix(Version, "v"))
 	fmt.Println("Usage:")
 	fmt.Println("  vessel <command> [options] [arguments]")
 	fmt.Println()
