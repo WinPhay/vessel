@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,10 +12,16 @@ import (
 )
 
 func TestMCPServerHandshakeAndTools(t *testing.T) {
+	tempWorkspace, err := os.MkdirTemp("", "vessel-mcp-workspace-*")
+	if err != nil {
+		t.Fatalf("failed to create temp workspace: %v", err)
+	}
+	defer os.RemoveAll(tempWorkspace)
+
 	mockSB := sandbox.NewMockSandbox()
 	var inBuf, outBuf bytes.Buffer
 
-	server := NewServer(mockSB, "/test/workspace", &inBuf, &outBuf)
+	server := NewServer(mockSB, tempWorkspace, &inBuf, &outBuf)
 
 	// Step 1: Send 'initialize'
 	reqInit := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n"
@@ -28,18 +35,24 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	reqRB := `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"vessel_rollback","arguments":{"tag":"v1"}}}` + "\n"
 	// Step 6: Send 'tools/call' for vessel_status
 	reqStatus := `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"vessel_status","arguments":{}}}` + "\n"
+	// Step 7: Send 'tools/call' for vessel_write_file
+	reqWrite := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"vessel_write_file","arguments":{"path":"hello.txt","content":"Hello Vessel MCP!"}}}` + "\n"
+	// Step 8: Send 'tools/call' for vessel_read_file
+	reqRead := `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"vessel_read_file","arguments":{"path":"hello.txt"}}}` + "\n"
+	// Step 9: Send 'tools/call' for vessel_list_dir
+	reqListDir := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"vessel_list_dir","arguments":{}}}` + "\n"
 
-	inBuf.WriteString(reqInit + reqList + reqExec + reqCP + reqRB + reqStatus)
+	inBuf.WriteString(reqInit + reqList + reqExec + reqCP + reqRB + reqStatus + reqWrite + reqRead + reqListDir)
 
 	ctx := context.Background()
-	err := server.Serve(ctx)
+	err = server.Serve(ctx)
 	if err != nil {
 		t.Fatalf("unexpected server error: %v", err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(outBuf.String()), "\n")
-	if len(lines) != 6 {
-		t.Fatalf("expected 6 responses, got %d:\n%s", len(lines), outBuf.String())
+	if len(lines) != 9 {
+		t.Fatalf("expected 9 responses, got %d:\n%s", len(lines), outBuf.String())
 	}
 
 	// Verify initialize response
@@ -59,8 +72,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 4 {
-		t.Errorf("expected 4 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 7 {
+		t.Errorf("expected 7 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -97,6 +110,33 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	if resp6.Error != nil {
 		t.Errorf("unexpected error on vessel_status: %v", resp6.Error)
+	}
+
+	// Verify vessel_write_file response
+	var resp7 JSONRPCResponse
+	if err := json.Unmarshal([]byte(lines[6]), &resp7); err != nil {
+		t.Fatalf("failed to parse resp7: %v", err)
+	}
+	if resp7.Error != nil {
+		t.Errorf("unexpected error on vessel_write_file: %v", resp7.Error)
+	}
+
+	// Verify vessel_read_file response
+	var resp8 JSONRPCResponse
+	if err := json.Unmarshal([]byte(lines[7]), &resp8); err != nil {
+		t.Fatalf("failed to parse resp8: %v", err)
+	}
+	if resp8.Error != nil {
+		t.Errorf("unexpected error on vessel_read_file: %v", resp8.Error)
+	}
+
+	// Verify vessel_list_dir response
+	var resp9 JSONRPCResponse
+	if err := json.Unmarshal([]byte(lines[8]), &resp9); err != nil {
+		t.Fatalf("failed to parse resp9: %v", err)
+	}
+	if resp9.Error != nil {
+		t.Errorf("unexpected error on vessel_list_dir: %v", resp9.Error)
 	}
 }
 

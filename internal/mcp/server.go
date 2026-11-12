@@ -225,6 +225,71 @@ func (s *Server) getToolsList() []Tool {
 				"properties": map[string]any{},
 			},
 		},
+		{
+			Name:        "vessel_read_file",
+			Description: "Reads file content from the workspace sandbox with optional line pagination.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "File path relative to workspace root.",
+					},
+					"start_line": map[string]any{
+						"type":        "integer",
+						"description": "Optional starting line number (1-indexed).",
+					},
+					"end_line": map[string]any{
+						"type":        "integer",
+						"description": "Optional ending line number (1-indexed).",
+					},
+				},
+				"required": []string{"path"},
+			},
+		},
+		{
+			Name:        "vessel_write_file",
+			Description: "Atomically writes content to a file in the workspace sandbox, automatically creating parent directories.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "File path relative to workspace root.",
+					},
+					"content": map[string]any{
+						"type":        "string",
+						"description": "Text content to write to the file.",
+					},
+					"overwrite": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to overwrite existing files (default: true).",
+					},
+				},
+				"required": []string{"path", "content"},
+			},
+		},
+		{
+			Name:        "vessel_list_dir",
+			Description: "Lists directory contents in the workspace sandbox, skipping ignored paths (.vessel, .git).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Directory path relative to workspace root (default: '.').",
+					},
+					"recursive": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to list subdirectories recursively (default: false).",
+					},
+					"max_depth": map[string]any{
+						"type":        "integer",
+						"description": "Maximum directory depth when recursive (default: 2).",
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -311,6 +376,69 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			"version":   ServerVersion,
 		}
 		payload, _ := json.MarshalIndent(statusData, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_read_file":
+		var args struct {
+			Path      string `json:"path"`
+			StartLine int    `json:"start_line"`
+			EndLine   int    `json:"end_line"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_read_file: %v", err))
+		}
+		if args.Path == "" {
+			return s.toolErrorResponse(req.ID, "path parameter is required")
+		}
+
+		res, err := sandbox.ReadFile(s.workspace, args.Path, args.StartLine, args.EndLine)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("read failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_write_file":
+		var args struct {
+			Path      string `json:"path"`
+			Content   string `json:"content"`
+			Overwrite *bool  `json:"overwrite"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_write_file: %v", err))
+		}
+		if args.Path == "" {
+			return s.toolErrorResponse(req.ID, "path parameter is required")
+		}
+		overwrite := true
+		if args.Overwrite != nil {
+			overwrite = *args.Overwrite
+		}
+
+		res, err := sandbox.WriteFile(s.workspace, args.Path, args.Content, overwrite)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("write failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_list_dir":
+		var args struct {
+			Path      string `json:"path"`
+			Recursive bool   `json:"recursive"`
+			MaxDepth  int    `json:"max_depth"`
+		}
+		_ = json.Unmarshal(callParams.Arguments, &args)
+		dirPath := "."
+		if args.Path != "" {
+			dirPath = args.Path
+		}
+
+		res, err := sandbox.ListDir(s.workspace, dirPath, args.Recursive, args.MaxDepth)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("list failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))
 
 	default:
