@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,7 +18,8 @@ import (
 )
 
 var (
-	ErrInvalidURL          = errors.New("invalid or unsupported URL protocol (must be http, https, or file)")
+	ErrInvalidURL          = errors.New("invalid or unsupported URL protocol (must be http or https)")
+	ErrSSRFBlocked         = errors.New("access to private, local, or cloud metadata network addresses is blocked for security")
 	ErrBrowserNotInstalled = errors.New("neither chromium nor curl/wget found in sandbox container")
 	ErrScreenshotFailed    = errors.New("failed to capture screenshot in container")
 )
@@ -95,15 +97,51 @@ var (
 	reExcessLines = regexp.MustCompile(`\n{3,}`)
 )
 
-// ValidateURL ensures the target URL uses a permitted scheme.
+// isBlockedHost checks whether the destination host is private, loopback, or cloud metadata.
+func isBlockedHost(host string) bool {
+	h := strings.ToLower(host)
+	// Strip port if present
+	if colon := strings.LastIndex(h, ":"); colon != -1 {
+		if !strings.Contains(h[colon:], "]") {
+			h = h[:colon]
+		}
+	}
+	h = strings.Trim(h, "[]")
+
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".local") {
+		return true
+	}
+
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+
+	// Block loopback, link-local, private, and unspecified
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+		return true
+	}
+
+	// Explicit check for AWS/GCP/Azure metadata service (169.254.169.254)
+	if ip.String() == "169.254.169.254" {
+		return true
+	}
+
+	return false
+}
+
+// ValidateURL ensures the target URL uses a permitted scheme (http/https only) and does not target internal/private hosts (SSRF).
 func ValidateURL(rawURL string) error {
 	u, err := url.ParseRequestURI(rawURL)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidURL, err)
 	}
 	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" && scheme != "file" {
-		return fmt.Errorf("%w: scheme %q is not permitted", ErrInvalidURL, scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("%w: scheme %q is not permitted (only http and https allowed)", ErrInvalidURL, scheme)
+	}
+	if isBlockedHost(u.Host) {
+		return fmt.Errorf("%w: host %q is blocked", ErrSSRFBlocked, u.Host)
 	}
 	return nil
 }
@@ -269,28 +307,30 @@ func BrowseURL(ctx context.Context, sb Sandbox, targetURL string, waitSec int, i
 	if waitSec <= 0 {
 		waitSec = 2
 	}
+	virtualBudgetMs := waitSec * 1000
+	curlTimeoutSec := waitSec + 5
 
 	// Command inside container: probe chromium first for dynamic DOM; fall back to curl/wget
 	cmd := fmt.Sprintf(`sh -c '
 URL=%s
-if command -v chromium-browser >/dev/null 2>&1; then
+if command -v chromium >/dev/null 2>&1; then
     echo "===ENGINE:chromium==="
-    chromium-browser --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --dump-dom "$URL" 2>/dev/null
-elif command -v chromium >/dev/null 2>&1; then
+    chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --virtual-time-budget=%d --dump-dom "$URL" 2>/dev/null
+elif command -v chromium-browser >/dev/null 2>&1; then
     echo "===ENGINE:chromium==="
-    chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --dump-dom "$URL" 2>/dev/null
+    chromium-browser --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --virtual-time-budget=%d --dump-dom "$URL" 2>/dev/null
 elif command -v curl >/dev/null 2>&1; then
     echo "===ENGINE:curl==="
-    curl -sSL -L -A "Mozilla/5.0 (Vessel-Agent/0.1)" "$URL"
+    curl -sSL -L --max-time %d -A "Mozilla/5.0 (Vessel-Agent/0.1)" "$URL"
 elif command -v wget >/dev/null 2>&1; then
     echo "===ENGINE:wget==="
-    wget -qO- "$URL"
+    wget -qO- --timeout=%d "$URL"
 else
     echo "===ENGINE:none==="
     echo "ERROR: no browser or HTTP client found in sandbox" >&2
     exit 127
 fi
-'`, ShellEscape(targetURL))
+'`, ShellEscape(targetURL), virtualBudgetMs, virtualBudgetMs, curlTimeoutSec, curlTimeoutSec)
 
 	res, err := sb.Exec(ctx, cmd)
 	if err != nil {
@@ -364,22 +404,27 @@ func TakeScreenshot(ctx context.Context, sb Sandbox, workspaceRoot, targetURL, o
 
 	containerPath := "/workspace/" + filepath.ToSlash(relPath)
 
+	actualHeight := height
+	if fullPage {
+		actualHeight = 3000 // expand viewport height for full-page rendering
+	}
+
 	cmd := fmt.Sprintf(`sh -c '
 URL=%s
 OUT=%s
-if command -v chromium-browser >/dev/null 2>&1; then
-    mkdir -p "$(dirname "$OUT")"
-    chromium-browser --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
-        --window-size=%d,%d --screenshot="$OUT" "$URL" 2>/dev/null
-elif command -v chromium >/dev/null 2>&1; then
+if command -v chromium >/dev/null 2>&1; then
     mkdir -p "$(dirname "$OUT")"
     chromium --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
-        --window-size=%d,%d --screenshot="$OUT" "$URL" 2>/dev/null
+        --virtual-time-budget=2000 --hide-scrollbars --window-size=%d,%d --screenshot="$OUT" "$URL" 2>/dev/null
+elif command -v chromium-browser >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$OUT")"
+    chromium-browser --headless --disable-gpu --no-sandbox --disable-dev-shm-usage \
+        --virtual-time-budget=2000 --hide-scrollbars --window-size=%d,%d --screenshot="$OUT" "$URL" 2>/dev/null
 else
     echo "ERROR: chromium not found in sandbox" >&2
     exit 127
 fi
-'`, ShellEscape(targetURL), ShellEscape(containerPath), width, height, width, height)
+'`, ShellEscape(targetURL), ShellEscape(containerPath), width, actualHeight, width, actualHeight)
 
 	_, err = sb.Exec(ctx, cmd)
 	if err != nil {

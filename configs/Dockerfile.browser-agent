@@ -1,6 +1,6 @@
 # Vessel AgentOS - Headless Browser Agent Image
-# Includes headless Chromium, curl, python3, and development tools for web testing & inspection.
-FROM ubuntu:24.04
+# Uses Debian Bookworm for native container-compatible Chromium packages (avoids Ubuntu snapd stub).
+FROM debian:bookworm-slim
 
 # Prevent interactive prompts during apt install
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -15,18 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep \
     python3 \
     ca-certificates \
-    chromium-browser \
+    chromium \
+    chromium-driver \
     fonts-liberation \
     fonts-noto-color-emoji \
-    libnss3 \
-    libatk-bridge2.0-0 \
-    libx11-xcb1 \
-    libdrm2 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Enforce non-interactive execution invariants for LLM drivers

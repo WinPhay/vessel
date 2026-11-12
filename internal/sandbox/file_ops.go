@@ -71,15 +71,30 @@ func ResolveSecurePath(workspaceRoot, userPath string) (string, error) {
 		return "", ErrPathEscapesJail
 	}
 
-	// Verify symlinks don't escape sandbox
-	if _, err := os.Lstat(resolved); err == nil {
-		realPath, err := filepath.EvalSymlinks(resolved)
-		if err == nil {
-			realRel, err := filepath.Rel(cleanRoot, realPath)
-			if err != nil || strings.HasPrefix(realRel, "..") {
-				return "", ErrPathEscapesJail
+	// Resolve real path of cleanRoot in case root itself is a symlink (e.g. /tmp -> /private/tmp on macOS)
+	realRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		realRoot = cleanRoot
+	}
+
+	// Verify symlinks don't escape sandbox by resolving the deepest existing ancestor
+	curr := resolved
+	for {
+		if _, err := os.Lstat(curr); err == nil {
+			realCurr, err := filepath.EvalSymlinks(curr)
+			if err == nil {
+				realRel, err := filepath.Rel(realRoot, realCurr)
+				if err != nil || strings.HasPrefix(realRel, "..") || realRel == ".." {
+					return "", ErrPathEscapesJail
+				}
 			}
+			break
 		}
+		parent := filepath.Dir(curr)
+		if parent == curr || len(parent) < len(cleanRoot) {
+			break
+		}
+		curr = parent
 	}
 
 	return resolved, nil

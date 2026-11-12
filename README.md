@@ -49,13 +49,13 @@ go test -v ./...
 ./bin/vessel exec --workspace /path/to/project --memory 2g --cpus 1.5 --network none "npm test"
 
 # Create a named filesystem snapshot
-./bin/vessel checkpoint my-checkpoint --workspace /path/to/project
+./bin/vessel checkpoint --workspace /path/to/project my-checkpoint
 
 # List active checkpoints
 ./bin/vessel checkpoint list --workspace /path/to/project
 
 # Rollback workspace to an exact checkpoint
-./bin/vessel rollback my-checkpoint --workspace /path/to/project
+./bin/vessel rollback --workspace /path/to/project my-checkpoint
 
 # Check engine health, Docker connectivity, and snapshots
 ./bin/vessel status --workspace /path/to/project

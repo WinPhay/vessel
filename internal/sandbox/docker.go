@@ -203,12 +203,18 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		res.NanoCPUs = int64(cpus * 1e9)
 	}
 
+	if networkMode == "host" {
+		fmt.Fprintln(os.Stderr, "[vessel] WARNING: --network host disables container network isolation! Sockets and localhost are shared with host.")
+	}
+
 	hostCfg := &container.HostConfig{
 		Binds: []string{
 			fmt.Sprintf("%s:/workspace:rw", workspacePath),
 		},
 		NetworkMode: container.NetworkMode(networkMode),
 		Resources:   res,
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
 	}
 
 	resp, err := cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
@@ -302,6 +308,10 @@ func (d *DockerSandbox) Checkpoint(ctx context.Context, tag string) error {
 		return ErrSandboxClosed
 	}
 
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
+	}
+
 	// 1. Snapshot the host workspace filesystem state
 	if d.snapshotMgr != nil {
 		if err := d.snapshotMgr.CreateSnapshot(tag); err != nil {
@@ -331,6 +341,10 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 
 	if d.closed {
 		return ErrSandboxClosed
+	}
+
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
 	}
 
 	imageID, exists := d.checkpoints[tag]

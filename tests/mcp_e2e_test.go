@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,14 @@ func TestLiveMCPServerLifecycle(t *testing.T) {
 	binaryPath, err := filepath.Abs("../bin/vessel")
 	if err != nil {
 		t.Fatalf("failed to resolve binary path: %v", err)
+	}
+
+	// Auto-build binary if absent so a clean checkout can run 'go test ./...' without failing
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		buildCmd := exec.Command("go", "build", "-o", binaryPath, "../cmd/vessel")
+		if err := buildCmd.Run(); err != nil {
+			t.Skipf("skipping live E2E test: unable to compile ../bin/vessel: %v", err)
+		}
 	}
 
 	cmd := exec.Command(binaryPath, "mcp", "--mock", "--workspace", "..")

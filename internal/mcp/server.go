@@ -413,6 +413,9 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 		if err := json.Unmarshal(callParams.Arguments, &args); err != nil || args.Tag == "" {
 			return s.toolErrorResponse(req.ID, "tag parameter is required for vessel_checkpoint")
 		}
+		if err := sandbox.ValidateCheckpointTag(args.Tag); err != nil {
+			return s.toolErrorResponse(req.ID, err.Error())
+		}
 
 		if err := s.sb.Checkpoint(ctx, args.Tag); err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("checkpoint failed: %v", err))
@@ -425,6 +428,9 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 		}
 		if err := json.Unmarshal(callParams.Arguments, &args); err != nil || args.Tag == "" {
 			return s.toolErrorResponse(req.ID, "tag parameter is required for vessel_rollback")
+		}
+		if err := sandbox.ValidateCheckpointTag(args.Tag); err != nil {
+			return s.toolErrorResponse(req.ID, err.Error())
 		}
 
 		if err := s.sb.Rollback(ctx, args.Tag); err != nil {

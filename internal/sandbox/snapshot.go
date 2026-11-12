@@ -1,13 +1,70 @@
 package sandbox
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
+
+var (
+	ErrInvalidCheckpointTag = errors.New("invalid checkpoint tag")
+	reValidTag              = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+)
+
+// ValidateCheckpointTag ensures tag is a safe single-path-component tag without directory traversal.
+func ValidateCheckpointTag(tag string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return fmt.Errorf("%w: tag cannot be empty", ErrInvalidCheckpointTag)
+	}
+	if len(tag) > 64 {
+		return fmt.Errorf("%w: tag length cannot exceed 64 characters", ErrInvalidCheckpointTag)
+	}
+	if tag == "." || tag == ".." {
+		return fmt.Errorf("%w: tag cannot be '.' or '..'", ErrInvalidCheckpointTag)
+	}
+	if strings.ContainsAny(tag, `/\`) {
+		return fmt.Errorf("%w: tag cannot contain path separators", ErrInvalidCheckpointTag)
+	}
+	if !reValidTag.MatchString(tag) {
+		return fmt.Errorf("%w: tag %q must contain only alphanumeric characters, '.', '_', and '-'", ErrInvalidCheckpointTag, tag)
+	}
+	return nil
+}
+
+// GetDefaultSnapshotDir returns an isolated snapshot storage directory outside the workspace mount.
+func GetDefaultSnapshotDir(workspacePath string) (string, error) {
+	if custom := os.Getenv("VESSEL_SNAPSHOT_DIR"); custom != "" {
+		return custom, nil
+	}
+
+	absPath, err := filepath.Abs(workspacePath)
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.Sum256([]byte(absPath))
+	hashHex := hex.EncodeToString(hash[:8]) // 16-char unique identifier
+
+	var baseDir string
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		baseDir = filepath.Join(dataHome, "vessel", "snapshots", hashHex)
+	} else if home, err := os.UserHomeDir(); err == nil && home != "" {
+		baseDir = filepath.Join(home, ".local", "share", "vessel", "snapshots", hashHex)
+	} else {
+		baseDir = filepath.Join(os.TempDir(), "vessel-snapshots", hashHex)
+	}
+
+	return baseDir, nil
+}
 
 // SnapshotManager manages filesystem-level snapshots of a workspace directory.
 type SnapshotManager struct {
@@ -18,22 +75,52 @@ type SnapshotManager struct {
 }
 
 // NewSnapshotManager initializes a SnapshotManager for the given workspace.
+// Snapshots are stored outside the workspace tree to prevent the sandboxed container from tampering with them.
 func NewSnapshotManager(workspacePath string) (*SnapshotManager, error) {
 	absPath, err := filepath.Abs(workspacePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve absolute workspace path: %w", err)
 	}
 
-	snapDir := filepath.Join(absPath, ".vessel", "snapshots")
-	if err := os.MkdirAll(snapDir, 0755); err != nil {
+	snapDir, err := GetDefaultSnapshotDir(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine snapshot directory: %w", err)
+	}
+
+	if err := os.MkdirAll(snapDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create snapshot directory: %w", err)
 	}
 
-	return &SnapshotManager{
+	sm := &SnapshotManager{
 		workspacePath:   absPath,
 		snapshotBaseDir: snapDir,
-		ignoredDirs:     []string{".vessel", ".git"},
-	}, nil
+		ignoredDirs: []string{
+			".vessel", ".git", "node_modules", ".tmp", "dist",
+			"build", ".next", ".cache", "target", "vendor",
+		},
+	}
+	sm.loadVesselIgnore()
+
+	return sm, nil
+}
+
+// loadVesselIgnore reads custom ignore patterns from .vesselignore if present in workspace root.
+func (sm *SnapshotManager) loadVesselIgnore() {
+	ignoreFile := filepath.Join(sm.workspacePath, ".vesselignore")
+	f, err := os.Open(ignoreFile)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		sm.ignoredDirs = append(sm.ignoredDirs, line)
+	}
 }
 
 // isIgnored checks whether a path relative to the workspace root should be skipped.
@@ -57,8 +144,8 @@ func (sm *SnapshotManager) CreateSnapshot(tag string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if tag == "" {
-		return fmt.Errorf("checkpoint tag cannot be empty")
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
 	}
 
 	tagDir := filepath.Join(sm.snapshotBaseDir, tag)
@@ -66,7 +153,7 @@ func (sm *SnapshotManager) CreateSnapshot(tag string) error {
 		return fmt.Errorf("failed to clean existing snapshot tag dir: %w", err)
 	}
 
-	if err := os.MkdirAll(tagDir, 0755); err != nil {
+	if err := os.MkdirAll(tagDir, 0700); err != nil {
 		return fmt.Errorf("failed to create tag directory: %w", err)
 	}
 
@@ -106,8 +193,6 @@ func (sm *SnapshotManager) CreateSnapshot(tag string) error {
 		}
 
 		// Fast kernel-level file copy (delegates to copy_file_range / sendfile in Go runtime)
-		// Ensures complete isolation even on filesystems without CoW (e.g. ext4) where in-place
-		// truncation would corrupt hardlinked inodes.
 		return copyFile(srcPath, destPath, info.Mode())
 	})
 }
@@ -117,6 +202,10 @@ func (sm *SnapshotManager) CreateSnapshot(tag string) error {
 func (sm *SnapshotManager) RestoreSnapshot(tag string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
+	}
 
 	tagDir := filepath.Join(sm.snapshotBaseDir, tag)
 	if _, err := os.Stat(tagDir); os.IsNotExist(err) {
@@ -192,7 +281,6 @@ func (sm *SnapshotManager) RestoreSnapshot(tag string) error {
 			return os.Symlink(linkTarget, destPath)
 		}
 
-		// Clean copy to break any remaining hardlinks and guarantee independent workspace files
 		_ = os.Remove(destPath)
 		return copyFile(snapPath, destPath, info.Mode())
 	})
@@ -221,6 +309,10 @@ func (sm *SnapshotManager) ListSnapshots() ([]string, error) {
 func (sm *SnapshotManager) DeleteSnapshot(tag string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
+	}
 
 	tagDir := filepath.Join(sm.snapshotBaseDir, tag)
 	if _, err := os.Stat(tagDir); os.IsNotExist(err) {

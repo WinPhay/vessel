@@ -124,3 +124,37 @@ func TestCLI_Status(t *testing.T) {
 		t.Errorf("expected workspace in status, got: %s", stdout)
 	}
 }
+
+func TestCLI_InterspersedFlags(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-cli-interspersed-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "file.txt")
+	_ = os.WriteFile(testFile, []byte("v1 content"), 0644)
+
+	// Flag AFTER positional arg (fixes Bug 5)
+	stdout, _ := captureOutput(func() {
+		runCheckpoint([]string{"v1", "--workspace", tempDir})
+	})
+	if !strings.Contains(stdout, "created successfully") {
+		t.Errorf("interspersed flag checkpoint failed: %s", stdout)
+	}
+
+	_ = os.WriteFile(testFile, []byte("corrupted"), 0644)
+
+	// Rollback with flag AFTER positional arg
+	stdout, _ = captureOutput(func() {
+		runRollback([]string{"v1", "--workspace", tempDir})
+	})
+	if !strings.Contains(stdout, "restored to checkpoint 'v1'") {
+		t.Errorf("interspersed flag rollback failed: %s", stdout)
+	}
+
+	data, _ := os.ReadFile(testFile)
+	if string(data) != "v1 content" {
+		t.Errorf("expected 'v1 content', got %q", string(data))
+	}
+}

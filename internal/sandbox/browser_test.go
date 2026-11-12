@@ -12,8 +12,7 @@ func TestValidateURL(t *testing.T) {
 	valid := []string{
 		"http://example.com",
 		"https://example.com/api/v1?query=test#section",
-		"http://localhost:3000",
-		"file:///workspace/index.html",
+		"https://raw.githubusercontent.com/WinPhay/vessel/main/README.md",
 	}
 	for _, u := range valid {
 		if err := ValidateURL(u); err != nil {
@@ -27,10 +26,17 @@ func TestValidateURL(t *testing.T) {
 		"javascript:alert(1)",
 		"data:text/html,<h1>test</h1>",
 		"not-a-url",
+		"file:///workspace/index.html",
+		"http://localhost:3000",
+		"http://127.0.0.1:8080",
+		"http://169.254.169.254/latest/meta-data",
+		"http://10.0.0.5/admin",
+		"http://192.168.1.100",
+		"http://172.16.0.1",
 	}
 	for _, u := range invalid {
 		if err := ValidateURL(u); err == nil {
-			t.Errorf("ValidateURL(%q) expected error, got nil", u)
+			t.Errorf("ValidateURL(%q) expected error (SSRF or invalid scheme), got nil", u)
 		}
 	}
 }

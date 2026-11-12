@@ -79,6 +79,9 @@ func (m *MockSandbox) Checkpoint(ctx context.Context, tag string) error {
 	if m.closed {
 		return ErrSandboxClosed
 	}
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
+	}
 	m.checkpoints[tag] = true
 	return nil
 }
@@ -86,6 +89,9 @@ func (m *MockSandbox) Checkpoint(ctx context.Context, tag string) error {
 func (m *MockSandbox) Rollback(ctx context.Context, tag string) error {
 	if m.closed {
 		return ErrSandboxClosed
+	}
+	if err := ValidateCheckpointTag(tag); err != nil {
+		return err
 	}
 	if !m.checkpoints[tag] {
 		return ErrCheckpointNotFound

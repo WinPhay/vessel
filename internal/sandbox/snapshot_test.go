@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,7 @@ func TestSnapshotManager_CreateAndRestore(t *testing.T) {
 	fileA := filepath.Join(tempDir, "file_a.txt")
 	fileB := filepath.Join(tempDir, "subdir", "file_b.txt")
 	ignoredFile := filepath.Join(tempDir, ".git", "config")
+	nodeModulesFile := filepath.Join(tempDir, "node_modules", "pkg", "index.js")
 
 	if err := os.WriteFile(fileA, []byte("version 1 of A"), 0644); err != nil {
 		t.Fatalf("failed to write fileA: %v", err)
@@ -35,10 +37,22 @@ func TestSnapshotManager_CreateAndRestore(t *testing.T) {
 	if err := os.WriteFile(ignoredFile, []byte("git config contents"), 0644); err != nil {
 		t.Fatalf("failed to write git file: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(nodeModulesFile), 0755); err != nil {
+		t.Fatalf("failed to mkdir for node_modules: %v", err)
+	}
+	if err := os.WriteFile(nodeModulesFile, []byte("console.log('hi');"), 0644); err != nil {
+		t.Fatalf("failed to write node_modules file: %v", err)
+	}
 
 	sm, err := NewSnapshotManager(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create SnapshotManager: %v", err)
+	}
+	defer os.RemoveAll(sm.snapshotBaseDir)
+
+	// Verify snapshots live outside the workspace tree
+	if strings.HasPrefix(sm.snapshotBaseDir, tempDir) {
+		t.Errorf("snapshots must be stored outside workspace tree, got: %s", sm.snapshotBaseDir)
 	}
 
 	// 1. Create snapshot "v1"
@@ -47,9 +61,15 @@ func TestSnapshotManager_CreateAndRestore(t *testing.T) {
 	}
 
 	// Verify ignored file was NOT copied to snapshot
-	snapGitPath := filepath.Join(tempDir, ".vessel", "snapshots", "v1", ".git")
+	snapGitPath := filepath.Join(sm.snapshotBaseDir, "v1", ".git")
 	if _, err := os.Stat(snapGitPath); !os.IsNotExist(err) {
 		t.Errorf("expected .git to be ignored in snapshot, but found it at %s", snapGitPath)
+	}
+
+	// Verify node_modules was NOT copied to snapshot
+	snapNodePath := filepath.Join(sm.snapshotBaseDir, "v1", "node_modules")
+	if _, err := os.Stat(snapNodePath); !os.IsNotExist(err) {
+		t.Errorf("expected node_modules to be ignored in snapshot, but found it at %s", snapNodePath)
 	}
 
 	// 2. Mutate workspace (modify fileA, delete fileB, add fileC)
@@ -140,6 +160,35 @@ func TestSnapshotManager_NotFoundAndList(t *testing.T) {
 	tags, _ = sm.ListSnapshots()
 	if len(tags) != 1 || tags[0] != "snap-2" {
 		t.Errorf("expected only snap-2 remaining, got %v", tags)
+	}
+}
+
+func TestValidateCheckpointTag(t *testing.T) {
+	valid := []string{"v1", "v0.1.0", "snap-2026", "my_checkpoint", "A1.B2"}
+	for _, tag := range valid {
+		if err := ValidateCheckpointTag(tag); err != nil {
+			t.Errorf("ValidateCheckpointTag(%q) unexpected error: %v", tag, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"   ",
+		".",
+		"..",
+		"../../../victim",
+		"tag/slash",
+		"tag\\backslash",
+		"tag with spaces",
+		"tag$dollar",
+		"tag;semi",
+		"tag`backtick`",
+		strings.Repeat("a", 65), // >64 chars
+	}
+	for _, tag := range invalid {
+		if err := ValidateCheckpointTag(tag); err == nil {
+			t.Errorf("ValidateCheckpointTag(%q) expected error, got nil", tag)
+		}
 	}
 }
 

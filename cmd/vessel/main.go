@@ -47,6 +47,33 @@ func main() {
 	}
 }
 
+func parseInterspersed(flags *flag.FlagSet, args []string) error {
+	var flagArgs []string
+	var nonFlagArgs []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = append(flagArgs, arg)
+			flagName := strings.TrimLeft(arg, "-")
+			if !strings.Contains(flagName, "=") {
+				f := flags.Lookup(flagName)
+				if f != nil {
+					if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !bf.IsBoolFlag() {
+						if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+							i++
+							flagArgs = append(flagArgs, args[i])
+						}
+					}
+				}
+			}
+		} else {
+			nonFlagArgs = append(nonFlagArgs, arg)
+		}
+	}
+	return flags.Parse(append(flagArgs, nonFlagArgs...))
+}
+
 func runExec(args []string) {
 	execFlags := flag.NewFlagSet("exec", flag.ExitOnError)
 	workspace := execFlags.String("workspace", ".", "Host directory to mount into /workspace")
@@ -54,7 +81,7 @@ func runExec(args []string) {
 	network := execFlags.String("network", "bridge", "Network mode (bridge, none, host)")
 	memStr := execFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	cpus := execFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
-	_ = execFlags.Parse(args)
+	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
 	if len(remaining) == 0 {
@@ -64,7 +91,8 @@ func runExec(args []string) {
 	}
 
 	cmdToRun := remaining[0]
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
 	cfg := sandbox.DefaultDockerConfig(*workspace)
 	if *image != "" {
@@ -98,6 +126,7 @@ func runExec(args []string) {
 	res, err := sb.Exec(ctx, cmdToRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[vessel] Execution error: %v\n", err)
+		_ = sb.Close()
 		os.Exit(1)
 	}
 
@@ -109,7 +138,9 @@ func runExec(args []string) {
 	}
 
 	fmt.Printf("\n[vessel] Exit code: %d | Duration: %s | Estimated tokens: %d\n", res.ExitCode, res.Duration, res.TokenEstimate)
-	os.Exit(res.ExitCode)
+	exitCode := res.ExitCode
+	_ = sb.Close()
+	os.Exit(exitCode)
 }
 
 func runMCP(args []string) {
@@ -120,7 +151,7 @@ func runMCP(args []string) {
 	memStr := mcpFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	cpus := mcpFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
-	_ = mcpFlags.Parse(args)
+	_ = parseInterspersed(mcpFlags, args)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -167,7 +198,7 @@ func runMCP(args []string) {
 func runCheckpoint(args []string) {
 	cpFlags := flag.NewFlagSet("checkpoint", flag.ExitOnError)
 	workspace := cpFlags.String("workspace", ".", "Host directory to manage snapshots for")
-	_ = cpFlags.Parse(args)
+	_ = parseInterspersed(cpFlags, args)
 
 	sm, err := sandbox.NewSnapshotManager(*workspace)
 	if err != nil {
@@ -203,6 +234,11 @@ func runCheckpoint(args []string) {
 		tag = remaining[1]
 	}
 
+	if err := sandbox.ValidateCheckpointTag(tag); err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Invalid checkpoint tag: %v\n", err)
+		os.Exit(1)
+	}
+
 	if err := sm.CreateSnapshot(tag); err != nil {
 		fmt.Fprintf(os.Stderr, "[vessel] Error creating checkpoint %s: %v\n", tag, err)
 		os.Exit(1)
@@ -214,7 +250,7 @@ func runCheckpoint(args []string) {
 func runRollback(args []string) {
 	rbFlags := flag.NewFlagSet("rollback", flag.ExitOnError)
 	workspace := rbFlags.String("workspace", ".", "Host directory to rollback")
-	_ = rbFlags.Parse(args)
+	_ = parseInterspersed(rbFlags, args)
 
 	remaining := rbFlags.Args()
 	if len(remaining) == 0 {
@@ -224,6 +260,11 @@ func runRollback(args []string) {
 	}
 
 	tag := remaining[0]
+	if err := sandbox.ValidateCheckpointTag(tag); err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Invalid checkpoint tag: %v\n", err)
+		os.Exit(1)
+	}
+
 	sm, err := sandbox.NewSnapshotManager(*workspace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[vessel] Error initializing snapshot manager: %v\n", err)
@@ -241,7 +282,7 @@ func runRollback(args []string) {
 func runStatus(args []string) {
 	stFlags := flag.NewFlagSet("status", flag.ExitOnError)
 	workspace := stFlags.String("workspace", ".", "Host directory to inspect")
-	_ = stFlags.Parse(args)
+	_ = parseInterspersed(stFlags, args)
 
 	absPath, err := filepath.Abs(*workspace)
 	if err != nil {
