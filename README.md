@@ -1,7 +1,7 @@
 # Vessel
 
 [![CI](https://github.com/WinPhay/vessel/actions/workflows/ci.yml/badge.svg)](https://github.com/WinPhay/vessel/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/WinPhay/vessel)](https://goreportcard.com/report/github.com/WinPhay/vessel)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 > **The local, time-traveling sandbox engine for autonomous AI agents.**
 
