@@ -16,7 +16,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-const Version = "0.1.0-alpha"
+var Version = "0.1.0-alpha"
 
 func main() {
 	if len(os.Args) < 2 {
