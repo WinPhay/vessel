@@ -1,0 +1,28 @@
+# Vessel AgentOS - Lightweight Alpine Image
+# Optimized for fast startup, minimal footprint, and core developer tools.
+FROM alpine:3.20
+
+# Install core cognitive and development tooling
+RUN apk update && apk add --no-cache \
+    bash \
+    coreutils \
+    git \
+    ripgrep \
+    curl \
+    jq \
+    python3 \
+    py3-pip \
+    build-base \
+    ca-certificates \
+    && rm -rf /var/cache/apk/*
+
+# Enforce non-interactive execution invariants for LLM drivers
+ENV DEBIAN_FRONTEND=noninteractive \
+    TERM=dumb \
+    PAGER=cat \
+    GIT_PAGER=cat \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /workspace
+
+CMD ["sh", "-c", "while true; do sleep 3600; done"]

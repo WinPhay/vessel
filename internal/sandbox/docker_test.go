@@ -26,6 +26,31 @@ func TestDefaultDockerConfig(t *testing.T) {
 	}
 }
 
+func TestResolveImageAlias(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"agent", ImageAgentAlpine},
+		{"vessel-agent", ImageAgentAlpine},
+		{"default", ImageAgentAlpine},
+		{"ubuntu", ImageAgentUbuntu},
+		{"ubuntu-agent", ImageAgentUbuntu},
+		{"alpine", ImageAlpineRaw},
+		{"alpine-raw", ImageAlpineRaw},
+		{"", ImageAlpineRaw},
+		{"custom/my-image:v1", "custom/my-image:v1"},
+		{"python:3.11-slim", "python:3.11-slim"},
+	}
+
+	for _, tc := range tests {
+		actual := ResolveImageAlias(tc.input)
+		if actual != tc.expected {
+			t.Errorf("ResolveImageAlias(%q): expected %q, got %q", tc.input, tc.expected, actual)
+		}
+	}
+}
+
 func TestDockerSandbox_NonexistentWorkspace(t *testing.T) {
 	ctx := context.Background()
 	cfg := DockerSandboxConfig{

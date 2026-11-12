@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,31 @@ type DockerSandbox struct {
 	closed      bool
 }
 
+const (
+	// ImageAlpineRaw is the minimal base alpine image.
+	ImageAlpineRaw = "alpine:latest"
+	// ImageAgentAlpine is the pre-baked lightweight Vessel AgentOS image.
+	ImageAgentAlpine = "vessel-agent:alpine"
+	// ImageAgentUbuntu is the comprehensive developer Vessel AgentOS image.
+	ImageAgentUbuntu = "vessel-agent:ubuntu"
+)
+
+// ResolveImageAlias resolves friendly shorthand aliases to full Docker image tags.
+func ResolveImageAlias(aliasOrName string) string {
+	switch strings.ToLower(strings.TrimSpace(aliasOrName)) {
+	case "agent", "vessel-agent", "default":
+		return ImageAgentAlpine
+	case "ubuntu", "ubuntu-agent":
+		return ImageAgentUbuntu
+	case "alpine", "alpine-raw":
+		return ImageAlpineRaw
+	case "":
+		return ImageAlpineRaw
+	default:
+		return aliasOrName
+	}
+}
+
 // DefaultDockerConfig returns sensible defaults for local agent execution.
 func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 	absPath, err := filepath.Abs(workspacePath)
@@ -43,7 +69,7 @@ func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 		absPath = workspacePath
 	}
 	return DockerSandboxConfig{
-		ImageName:     "alpine:latest",
+		ImageName:     ImageAlpineRaw,
 		WorkspacePath: absPath,
 		ContainerName: fmt.Sprintf("vessel-sandbox-%d", time.Now().UnixNano()),
 		MaxOutputSize: 100 * 1024, // 100 KB
@@ -52,6 +78,8 @@ func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 
 // NewDockerSandbox creates and starts an isolated container with /workspace mounted.
 func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.CommonAPIClient) (*DockerSandbox, error) {
+	cfg.ImageName = ResolveImageAlias(cfg.ImageName)
+
 	var err error
 	if cli == nil {
 		cli, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
