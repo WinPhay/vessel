@@ -33,6 +33,7 @@ Host Environment (Developer Workstation)
 2. **Mount Jail Invariant**: Only the targeted working directory is mounted into the container at `/workspace`. Host root, `~/.ssh`, `~/.bashrc`, and cloud credentials must never be mounted.
 3. **Atomic Time-Travel Invariant**: Checkpointing a sandbox state produces an immutable snapshot tag. Calling rollback restores the exact filesystem snapshot in <1s.
 4. **Token-Hygiene Invariant**: All raw command stdout/stderr must pass through the token scrubber before returning to the MCP client. ANSI codes, binary garbage, and terminal escapes are stripped to protect LLM context windows.
+5. **Resource-Bounding Invariant**: Containers strictly enforce configurable kernel cgroup limits (`MemoryBytes`, `NanoCPUs`) to prevent infinite recursion, memory leaks, or CPU starvation on the host system.
 
 ---
 

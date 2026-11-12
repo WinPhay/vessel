@@ -52,12 +52,14 @@ func runExec(args []string) {
 	workspace := execFlags.String("workspace", ".", "Host directory to mount into /workspace")
 	image := execFlags.String("image", "alpine:latest", "Docker container image or alias (agent, ubuntu, alpine)")
 	network := execFlags.String("network", "bridge", "Network mode (bridge, none, host)")
+	memStr := execFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
+	cpus := execFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
 	_ = execFlags.Parse(args)
 
 	remaining := execFlags.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: vessel exec requires a command to run inside the sandbox")
-		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] \"<command>\"")
+		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] \"<command>\"")
 		os.Exit(1)
 	}
 
@@ -70,6 +72,17 @@ func runExec(args []string) {
 	}
 	if *network != "" {
 		cfg.NetworkMode = *network
+	}
+	if *memStr != "" {
+		memBytes, err := sandbox.ParseMemoryString(*memStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.MemoryBytes = memBytes
+	}
+	if *cpus > 0 {
+		cfg.CPUShares = *cpus
 	}
 
 	fmt.Printf("[vessel] Initializing sandbox container (image: %s, network: %s, workspace: %s)...\n", cfg.ImageName, cfg.NetworkMode, cfg.WorkspacePath)
@@ -104,6 +117,8 @@ func runMCP(args []string) {
 	workspace := mcpFlags.String("workspace", ".", "Host directory to mount into /workspace")
 	image := mcpFlags.String("image", "alpine:latest", "Docker container image or alias (agent, ubuntu, alpine)")
 	network := mcpFlags.String("network", "bridge", "Network mode (bridge, none, host)")
+	memStr := mcpFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
+	cpus := mcpFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = mcpFlags.Parse(args)
 
@@ -117,6 +132,17 @@ func runMCP(args []string) {
 	}
 	if *network != "" {
 		cfg.NetworkMode = *network
+	}
+	if *memStr != "" {
+		memBytes, err := sandbox.ParseMemoryString(*memStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.MemoryBytes = memBytes
+	}
+	if *cpus > 0 {
+		cfg.CPUShares = *cpus
 	}
 
 	if *useMock {
@@ -262,9 +288,9 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  exec        Execute a command inside the sandbox container")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>")
 	fmt.Println("  mcp         Start stdio Model Context Protocol server")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --mock")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --mock")
 	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
 	fmt.Println("              Usage: vessel checkpoint [create <tag> | list | <tag>] [--workspace <dir>]")
 	fmt.Println("  rollback    Restore workspace to a named checkpoint")
@@ -283,4 +309,8 @@ func printUsage() {
 	fmt.Println("  bridge      Standard container network with outbound Internet access (default)")
 	fmt.Println("  none        Complete airgap isolation: zero network interfaces or outbound sockets")
 	fmt.Println("  host        Share host networking stack")
+	fmt.Println()
+	fmt.Println("Resource Quotas:")
+	fmt.Println("  --memory    Limit container RAM (e.g. '512m', '2g', '4gb'; default: unlimited)")
+	fmt.Println("  --cpus      Limit container CPU cores (e.g. '1.5', '2.0'; default: unlimited)")
 }

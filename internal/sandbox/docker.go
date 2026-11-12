@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ type DockerSandboxConfig struct {
 	ContainerName string
 	MaxOutputSize int
 	NetworkMode   string
+	MemoryBytes   int64   // Memory limit in bytes (0 = unlimited)
+	CPUShares     float64 // CPU cores (e.g., 1.5, 2.0; 0 = unlimited)
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -63,6 +66,43 @@ func ResolveImageAlias(aliasOrName string) string {
 	}
 }
 
+// ParseMemoryString converts human-readable memory strings (e.g., "512m", "1g", "2gb", "4096k") to bytes.
+// Empty string, "0", or "unlimited" returns 0 (unlimited).
+func ParseMemoryString(val string) (int64, error) {
+	val = strings.TrimSpace(strings.ToLower(val))
+	if val == "" || val == "0" || val == "unlimited" {
+		return 0, nil
+	}
+
+	val = strings.TrimSuffix(val, "b") // handle "gb", "mb", "kb"
+	multiplier := int64(1)
+	numStr := val
+
+	if strings.HasSuffix(val, "k") {
+		multiplier = 1024
+		numStr = strings.TrimSuffix(val, "k")
+	} else if strings.HasSuffix(val, "m") {
+		multiplier = 1024 * 1024
+		numStr = strings.TrimSuffix(val, "m")
+	} else if strings.HasSuffix(val, "g") {
+		multiplier = 1024 * 1024 * 1024
+		numStr = strings.TrimSuffix(val, "g")
+	} else if strings.HasSuffix(val, "t") {
+		multiplier = 1024 * 1024 * 1024 * 1024
+		numStr = strings.TrimSuffix(val, "t")
+	}
+
+	num, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid memory format %q: %w", val, err)
+	}
+	if num < 0 {
+		return 0, fmt.Errorf("memory limit cannot be negative: %s", val)
+	}
+
+	return int64(num * float64(multiplier)), nil
+}
+
 // DefaultDockerConfig returns sensible defaults for local agent execution.
 func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 	absPath, err := filepath.Abs(workspacePath)
@@ -75,6 +115,8 @@ func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 		ContainerName: fmt.Sprintf("vessel-sandbox-%d", time.Now().UnixNano()),
 		MaxOutputSize: 100 * 1024, // 100 KB
 		NetworkMode:   "bridge",
+		MemoryBytes:   0,
+		CPUShares:     0,
 	}
 }
 
@@ -108,7 +150,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		_ = reader.Close()
 	}
 
-	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode)
+	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +171,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 	}, nil
 }
 
-func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string) (string, error) {
+func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64) (string, error) {
 	if networkMode == "" {
 		networkMode = "bridge"
 	}
@@ -149,11 +191,20 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		},
 	}
 
+	res := container.Resources{}
+	if memBytes > 0 {
+		res.Memory = memBytes
+	}
+	if cpus > 0 {
+		res.NanoCPUs = int64(cpus * 1e9)
+	}
+
 	hostCfg := &container.HostConfig{
 		Binds: []string{
 			fmt.Sprintf("%s:/workspace:rw", workspacePath),
 		},
 		NetworkMode: container.NetworkMode(networkMode),
+		Resources:   res,
 	}
 
 	resp, err := cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
@@ -297,7 +348,7 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 
 	// 3. Spin up a fresh container using the checkpoint image with same workspace volume
 	newContainerName := fmt.Sprintf("%s-rollback-%d", d.cfg.ContainerName, time.Now().UnixNano())
-	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode)
+	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares)
 	if err != nil {
 		return fmt.Errorf("failed to restore container from checkpoint %s: %w", tag, err)
 	}

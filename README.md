@@ -16,6 +16,8 @@ If you are an AI assistant or coding agent working in this repository, see [`AGE
 
 ## Key Features
 - **Host Shield**: Executes agent commands inside an isolated container with only `/workspace` mounted.
+- **Resource Quotas**: Enforces kernel cgroups limits on RAM (`--memory 2g`) and CPU cores (`--cpus 1.5`) to prevent host starvation.
+- **Network Isolation**: Supports complete airgap mode (`--network none`) to block LLM credential exfiltration.
 - **Time-Travel Rollbacks**: Create instant filesystem checkpoints (`vessel_checkpoint`) and restore them (`vessel_rollback`) in sub-second time.
 - **Native MCP Interface**: Plugs directly into Claude Desktop, Cursor, Antigravity, and Cline over stdio Model Context Protocol.
 - **Token Scrubber**: Strips ANSI escape codes, eliminates interactive terminal hangs, and formats structured execution receipts.
@@ -36,8 +38,8 @@ go test -v ./...
 
 ### CLI Commands
 ```bash
-# Execute isolated command inside sandbox (supports --network none for airgap)
-./bin/vessel exec --workspace /path/to/project "npm test"
+# Execute isolated command inside sandbox (supports --network, --memory, and --cpus)
+./bin/vessel exec --workspace /path/to/project --memory 2g --cpus 1.5 --network none "npm test"
 
 # Create a named filesystem snapshot
 ./bin/vessel checkpoint my-checkpoint --workspace /path/to/project
@@ -58,7 +60,12 @@ go test -v ./...
   "mcpServers": {
     "vessel": {
       "command": "/path/to/bin/vessel",
-      "args": ["mcp", "--workspace", "/path/to/your/project"]
+      "args": [
+        "mcp",
+        "--workspace", "/path/to/your/project",
+        "--memory", "2g",
+        "--cpus", "2.0"
+      ]
     }
   }
 }

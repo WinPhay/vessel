@@ -41,6 +41,56 @@ func TestDockerSandbox_NetworkConfig(t *testing.T) {
 	}
 }
 
+func TestParseMemoryString(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+		hasErr   bool
+	}{
+		{"", 0, false},
+		{"0", 0, false},
+		{"unlimited", 0, false},
+		{"512m", 512 * 1024 * 1024, false},
+		{"512MB", 512 * 1024 * 1024, false},
+		{"1g", 1 * 1024 * 1024 * 1024, false},
+		{"2gb", 2 * 1024 * 1024 * 1024, false},
+		{"4G", 4 * 1024 * 1024 * 1024, false},
+		{"1024k", 1024 * 1024, false},
+		{"invalid", 0, true},
+		{"-500m", 0, true},
+	}
+
+	for _, tc := range tests {
+		actual, err := ParseMemoryString(tc.input)
+		if tc.hasErr {
+			if err == nil {
+				t.Errorf("ParseMemoryString(%q): expected error, got nil", tc.input)
+			}
+		} else {
+			if err != nil {
+				t.Errorf("ParseMemoryString(%q): unexpected error: %v", tc.input, err)
+			}
+			if actual != tc.expected {
+				t.Errorf("ParseMemoryString(%q): expected %d, got %d", tc.input, tc.expected, actual)
+			}
+		}
+	}
+}
+
+func TestDockerSandbox_ResourceConfig(t *testing.T) {
+	cfg := DefaultDockerConfig("/tmp")
+	if cfg.MemoryBytes != 0 || cfg.CPUShares != 0 {
+		t.Errorf("expected default resources unlimited (0), got mem=%d, cpu=%f", cfg.MemoryBytes, cfg.CPUShares)
+	}
+
+	cfg.MemoryBytes = 2 * 1024 * 1024 * 1024
+	cfg.CPUShares = 2.0
+
+	if cfg.MemoryBytes != 2147483648 || cfg.CPUShares != 2.0 {
+		t.Errorf("resource config mismatch: mem=%d, cpu=%f", cfg.MemoryBytes, cfg.CPUShares)
+	}
+}
+
 func TestResolveImageAlias(t *testing.T) {
 	tests := []struct {
 		input    string
