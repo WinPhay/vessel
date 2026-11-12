@@ -31,6 +31,24 @@ go build -o bin/vessel ./cmd/vessel
 go test -v ./...
 ```
 
+### CLI Commands
+```bash
+# Execute isolated command inside sandbox (supports --network none for airgap)
+./bin/vessel exec --workspace /path/to/project "npm test"
+
+# Create a named filesystem snapshot
+./bin/vessel checkpoint my-checkpoint --workspace /path/to/project
+
+# List active checkpoints
+./bin/vessel checkpoint list --workspace /path/to/project
+
+# Rollback workspace to an exact checkpoint
+./bin/vessel rollback my-checkpoint --workspace /path/to/project
+
+# Check engine health, Docker connectivity, and snapshots
+./bin/vessel status --workspace /path/to/project
+```
+
 ### Connect to Claude Desktop or Cursor (MCP Config)
 ```json
 {

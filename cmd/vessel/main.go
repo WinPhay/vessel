@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/WinPhay/vessel/internal/mcp"
 	"github.com/WinPhay/vessel/internal/sandbox"
+	"github.com/docker/docker/client"
 )
 
 const Version = "0.1.0-alpha"
@@ -28,6 +32,12 @@ func main() {
 		runMCP(os.Args[2:])
 	case "exec":
 		runExec(os.Args[2:])
+	case "checkpoint":
+		runCheckpoint(os.Args[2:])
+	case "rollback":
+		runRollback(os.Args[2:])
+	case "status":
+		runStatus(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -128,26 +138,149 @@ func runMCP(args []string) {
 	}
 }
 
+func runCheckpoint(args []string) {
+	cpFlags := flag.NewFlagSet("checkpoint", flag.ExitOnError)
+	workspace := cpFlags.String("workspace", ".", "Host directory to manage snapshots for")
+	_ = cpFlags.Parse(args)
+
+	sm, err := sandbox.NewSnapshotManager(*workspace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Error initializing snapshot manager: %v\n", err)
+		os.Exit(1)
+	}
+
+	remaining := cpFlags.Args()
+	if len(remaining) == 0 || remaining[0] == "list" {
+		tags, err := sm.ListSnapshots()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Error listing snapshots: %v\n", err)
+			os.Exit(1)
+		}
+		if len(tags) == 0 {
+			fmt.Println("[vessel] No checkpoints found for workspace.")
+			return
+		}
+		fmt.Println("[vessel] Active checkpoints:")
+		for _, tag := range tags {
+			fmt.Printf("  • %s\n", tag)
+		}
+		return
+	}
+
+	tag := remaining[0]
+	if tag == "create" {
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: checkpoint tag name required")
+			fmt.Fprintln(os.Stderr, "Usage: vessel checkpoint [create] <tag> [--workspace <dir>]")
+			os.Exit(1)
+		}
+		tag = remaining[1]
+	}
+
+	if err := sm.CreateSnapshot(tag); err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Error creating checkpoint %s: %v\n", tag, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[vessel] Checkpoint '%s' created successfully for workspace: %s\n", tag, *workspace)
+}
+
+func runRollback(args []string) {
+	rbFlags := flag.NewFlagSet("rollback", flag.ExitOnError)
+	workspace := rbFlags.String("workspace", ".", "Host directory to rollback")
+	_ = rbFlags.Parse(args)
+
+	remaining := rbFlags.Args()
+	if len(remaining) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: rollback requires a checkpoint tag")
+		fmt.Fprintln(os.Stderr, "Usage: vessel rollback <tag> [--workspace <dir>]")
+		os.Exit(1)
+	}
+
+	tag := remaining[0]
+	sm, err := sandbox.NewSnapshotManager(*workspace)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Error initializing snapshot manager: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := sm.RestoreSnapshot(tag); err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Error rolling back to checkpoint '%s': %v\n", tag, err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("[vessel] Workspace successfully restored to checkpoint '%s'.\n", tag)
+}
+
+func runStatus(args []string) {
+	stFlags := flag.NewFlagSet("status", flag.ExitOnError)
+	workspace := stFlags.String("workspace", ".", "Host directory to inspect")
+	_ = stFlags.Parse(args)
+
+	absPath, err := filepath.Abs(*workspace)
+	if err != nil {
+		absPath = *workspace
+	}
+
+	fmt.Printf("Vessel Engine Status (v%s)\n", Version)
+	fmt.Printf("  Workspace:    %s\n", absPath)
+
+	sm, err := sandbox.NewSnapshotManager(absPath)
+	if err != nil {
+		fmt.Printf("  Snapshots:    unavailable (%v)\n", err)
+	} else {
+		tags, _ := sm.ListSnapshots()
+		if len(tags) == 0 {
+			fmt.Printf("  Snapshots:    0 active\n")
+		} else {
+			fmt.Printf("  Snapshots:    %d active (%s)\n", len(tags), strings.Join(tags, ", "))
+		}
+	}
+
+	// Check Docker connectivity
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		fmt.Printf("  Docker:       disconnected\n")
+	} else {
+		_, pingErr := cli.Ping(ctx)
+		if pingErr != nil {
+			fmt.Printf("  Docker:       disconnected (daemon not running)\n")
+		} else {
+			fmt.Printf("  Docker:       connected (daemon online)\n")
+		}
+		_ = cli.Close()
+	}
+	fmt.Printf("  Default Mode: isolated (image: %s)\n", sandbox.ImageAlpineRaw)
+}
+
 func printUsage() {
 	fmt.Printf("Vessel v%s — Local AI Agent Sandbox Engine\n\n", Version)
 	fmt.Println("Usage:")
 	fmt.Println("  vessel <command> [options] [arguments]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  exec      Execute a command inside the sandbox container")
-	fmt.Println("            Flags: --workspace <dir>, --image <image/alias>, --network <mode>")
-	fmt.Println("  mcp       Start stdio Model Context Protocol server")
-	fmt.Println("            Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --mock")
-	fmt.Println("  version   Display version information")
-	fmt.Println("  help      Show this help text")
+	fmt.Println("  exec        Execute a command inside the sandbox container")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>")
+	fmt.Println("  mcp         Start stdio Model Context Protocol server")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --mock")
+	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
+	fmt.Println("              Usage: vessel checkpoint [create <tag> | list | <tag>] [--workspace <dir>]")
+	fmt.Println("  rollback    Restore workspace to a named checkpoint")
+	fmt.Println("              Usage: vessel rollback <tag> [--workspace <dir>]")
+	fmt.Println("  status      Display sandbox engine health and active snapshots")
+	fmt.Println("              Usage: vessel status [--workspace <dir>]")
+	fmt.Println("  version     Display version information")
+	fmt.Println("  help        Show this help text")
 	fmt.Println()
 	fmt.Println("Image Aliases:")
-	fmt.Println("  agent     Lightweight pre-baked agent with git, ripgrep, python3 (vessel-agent:alpine)")
-	fmt.Println("  ubuntu    Full developer environment with build-essential (vessel-agent:ubuntu)")
-	fmt.Println("  alpine    Minimal raw alpine image (alpine:latest)")
+	fmt.Println("  agent       Lightweight pre-baked agent with git, ripgrep, python3 (vessel-agent:alpine)")
+	fmt.Println("  ubuntu      Full developer environment with build-essential (vessel-agent:ubuntu)")
+	fmt.Println("  alpine      Minimal raw alpine image (alpine:latest)")
 	fmt.Println()
 	fmt.Println("Network Modes:")
-	fmt.Println("  bridge    Standard container network with outbound Internet access (default)")
-	fmt.Println("  none      Complete airgap isolation: zero network interfaces or outbound sockets")
-	fmt.Println("  host      Share host networking stack")
+	fmt.Println("  bridge      Standard container network with outbound Internet access (default)")
+	fmt.Println("  none        Complete airgap isolation: zero network interfaces or outbound sockets")
+	fmt.Println("  host        Share host networking stack")
 }

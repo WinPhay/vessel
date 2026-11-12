@@ -1,0 +1,126 @@
+package main
+
+import (
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func captureOutput(f func()) (string, string) {
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	outC := make(chan string)
+	errC := make(chan string)
+
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, rOut)
+		outC <- buf.String()
+	}()
+
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, rErr)
+		errC <- buf.String()
+	}()
+
+	f()
+
+	_ = wOut.Close()
+	_ = wErr.Close()
+
+	os.Stdout = origStdout
+	os.Stderr = origStderr
+
+	return <-outC, <-errC
+}
+
+func TestCLI_PrintUsage(t *testing.T) {
+	stdout, _ := captureOutput(func() {
+		printUsage()
+	})
+
+	if !strings.Contains(stdout, "Vessel v") {
+		t.Errorf("expected usage to mention Vessel v, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "checkpoint") || !strings.Contains(stdout, "rollback") || !strings.Contains(stdout, "status") {
+		t.Errorf("usage missing new subcommands: %s", stdout)
+	}
+}
+
+func TestCLI_CheckpointAndRollback(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-cli-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "file.txt")
+	if err := os.WriteFile(testFile, []byte("initial state"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. Create checkpoint via runCheckpoint
+	stdout, _ := captureOutput(func() {
+		runCheckpoint([]string{"--workspace", tempDir, "v1"})
+	})
+	if !strings.Contains(stdout, "created successfully") {
+		t.Errorf("unexpected checkpoint output: %s", stdout)
+	}
+
+	// 2. List checkpoints
+	stdout, _ = captureOutput(func() {
+		runCheckpoint([]string{"--workspace", tempDir, "list"})
+	})
+	if !strings.Contains(stdout, "v1") {
+		t.Errorf("expected list to include v1, got: %s", stdout)
+	}
+
+	// 3. Mutate file
+	if err := os.WriteFile(testFile, []byte("corrupted state"), 0644); err != nil {
+		t.Fatalf("failed to mutate file: %v", err)
+	}
+
+	// 4. Rollback to v1
+	stdout, _ = captureOutput(func() {
+		runRollback([]string{"--workspace", tempDir, "v1"})
+	})
+	if !strings.Contains(stdout, "restored to checkpoint 'v1'") {
+		t.Errorf("unexpected rollback output: %s", stdout)
+	}
+
+	// 5. Verify file contents restored
+	data, err := os.ReadFile(testFile)
+	if err != nil || string(data) != "initial state" {
+		t.Errorf("expected 'initial state', got %q", string(data))
+	}
+}
+
+func TestCLI_Status(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-cli-status-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	stdout, _ := captureOutput(func() {
+		runStatus([]string{"--workspace", tempDir})
+	})
+
+	if !strings.Contains(stdout, "Vessel Engine Status") {
+		t.Errorf("expected status header, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Workspace:") {
+		t.Errorf("expected workspace in status, got: %s", stdout)
+	}
+}
