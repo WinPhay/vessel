@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Build standard Vessel AgentOS images
-# Usage: ./scripts/build-images.sh [alpine|ubuntu|all]
+# Usage: ./scripts/build-images.sh [alpine|ubuntu|browser|all]
 
 TARGET="${1:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +27,15 @@ build_ubuntu() {
     echo "==> Successfully built vessel-agent:ubuntu"
 }
 
+build_browser() {
+    echo "==> Building vessel-agent:browser..."
+    docker build \
+        -t vessel-agent:browser \
+        -f "${ROOT_DIR}/configs/Dockerfile.browser-agent" \
+        "${ROOT_DIR}/configs"
+    echo "==> Successfully built vessel-agent:browser"
+}
+
 case "${TARGET}" in
     alpine)
         build_alpine
@@ -34,12 +43,16 @@ case "${TARGET}" in
     ubuntu)
         build_ubuntu
         ;;
+    browser)
+        build_browser
+        ;;
     all)
         build_alpine
         build_ubuntu
+        build_browser
         ;;
     *)
-        echo "Usage: $0 [alpine|ubuntu|all]"
+        echo "Usage: $0 [alpine|ubuntu|browser|all]"
         exit 1
         ;;
 esac

@@ -101,6 +101,8 @@ func TestResolveImageAlias(t *testing.T) {
 		{"default", ImageAgentAlpine},
 		{"ubuntu", ImageAgentUbuntu},
 		{"ubuntu-agent", ImageAgentUbuntu},
+		{"browser", ImageAgentBrowser},
+		{"browser-agent", ImageAgentBrowser},
 		{"alpine", ImageAlpineRaw},
 		{"alpine-raw", ImageAlpineRaw},
 		{"", ImageAlpineRaw},

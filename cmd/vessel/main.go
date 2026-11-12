@@ -303,6 +303,7 @@ func printUsage() {
 	fmt.Println("Image Aliases:")
 	fmt.Println("  agent       Lightweight pre-baked agent with git, ripgrep, python3 (vessel-agent:alpine)")
 	fmt.Println("  ubuntu      Full developer environment with build-essential (vessel-agent:ubuntu)")
+	fmt.Println("  browser     Headless Chromium environment for web testing & inspection (vessel-agent:browser)")
 	fmt.Println("  alpine      Minimal raw alpine image (alpine:latest)")
 	fmt.Println()
 	fmt.Println("Network Modes:")

@@ -290,6 +290,72 @@ func (s *Server) getToolsList() []Tool {
 				},
 			},
 		},
+		{
+			Name:        "vessel_browse_url",
+			Description: "Visits a web URL inside the isolated sandbox container, rendering dynamic client-side DOM and returning sanitized Markdown.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "The URL to visit (must be http, https, or file protocol).",
+					},
+					"wait_seconds": map[string]any{
+						"type":        "integer",
+						"description": "Seconds to wait for page to render (default: 2).",
+					},
+					"include_links": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to convert anchors to markdown links (default: true).",
+					},
+				},
+				"required": []string{"url"},
+			},
+		},
+		{
+			Name:        "vessel_screenshot",
+			Description: "Captures a PNG screenshot of a web page into the workspace sandbox directory.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "The web URL to screenshot.",
+					},
+					"output_path": map[string]any{
+						"type":        "string",
+						"description": "Workspace relative path for the output PNG (default: '.vessel/screenshots/page-<timestamp>.png').",
+					},
+					"full_page": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to capture full scrollable page (default: false).",
+					},
+					"width": map[string]any{
+						"type":        "integer",
+						"description": "Viewport width in pixels (default: 1280).",
+					},
+					"height": map[string]any{
+						"type":        "integer",
+						"description": "Viewport height in pixels (default: 800).",
+					},
+				},
+				"required": []string{"url"},
+			},
+		},
+		{
+			Name:        "vessel_extract_page",
+			Description: "Extracts structured interactive affordances (headings, links, input fields, buttons) from a web page as JSON.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "The web URL to extract structure from.",
+					},
+				},
+				"required": []string{"url"},
+			},
+		},
 	}
 }
 
@@ -437,6 +503,70 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 		res, err := sandbox.ListDir(s.workspace, dirPath, args.Recursive, args.MaxDepth)
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("list failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_browse_url":
+		var args struct {
+			URL          string `json:"url"`
+			WaitSeconds  int    `json:"wait_seconds"`
+			IncludeLinks *bool  `json:"include_links"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_browse_url: %v", err))
+		}
+		if args.URL == "" {
+			return s.toolErrorResponse(req.ID, "url parameter is required")
+		}
+		includeLinks := true
+		if args.IncludeLinks != nil {
+			includeLinks = *args.IncludeLinks
+		}
+
+		res, err := sandbox.BrowseURL(ctx, s.sb, args.URL, args.WaitSeconds, includeLinks)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("browse failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_screenshot":
+		var args struct {
+			URL        string `json:"url"`
+			OutputPath string `json:"output_path"`
+			FullPage   bool   `json:"full_page"`
+			Width      int    `json:"width"`
+			Height     int    `json:"height"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_screenshot: %v", err))
+		}
+		if args.URL == "" {
+			return s.toolErrorResponse(req.ID, "url parameter is required")
+		}
+
+		res, err := sandbox.TakeScreenshot(ctx, s.sb, s.workspace, args.URL, args.OutputPath, args.FullPage, args.Width, args.Height)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("screenshot failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_extract_page":
+		var args struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_extract_page: %v", err))
+		}
+		if args.URL == "" {
+			return s.toolErrorResponse(req.ID, "url parameter is required")
+		}
+
+		res, err := sandbox.ExtractPage(ctx, s.sb, args.URL)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("extract failed: %v", err))
 		}
 		payload, _ := json.MarshalIndent(res, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))

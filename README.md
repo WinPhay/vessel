@@ -16,6 +16,7 @@ If you are an AI assistant or coding agent working in this repository, see [`AGE
 
 ## Key Features
 - **Host Shield**: Executes agent commands inside an isolated container with only `/workspace` mounted.
+- **Headless Browser Sandbox**: Built-in containerized Chromium subsystem (`vessel_browse_url`, `vessel_screenshot`, `vessel_extract_page`) for safe web browsing, automated testing, and visual screenshots without exposing host cookies.
 - **Resource Quotas**: Enforces kernel cgroups limits on RAM (`--memory 2g`) and CPU cores (`--cpus 1.5`) to prevent host starvation.
 - **Network Isolation**: Supports complete airgap mode (`--network none`) to block LLM credential exfiltration.
 - **Time-Travel Rollbacks**: Create instant filesystem checkpoints (`vessel_checkpoint`) and restore them (`vessel_rollback`) in sub-second time.

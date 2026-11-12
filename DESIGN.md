@@ -39,7 +39,7 @@ Host Environment (Developer Workstation)
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 7 core tools over the Model Context Protocol:
+Vessel exposes 10 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
@@ -50,6 +50,9 @@ Vessel exposes 7 core tools over the Model Context Protocol:
 | `vessel_read_file` | `path: string`, `start_line?: int`, `end_line?: int` | Reads workspace file with optional line pagination, token count, and jail boundary verification. |
 | `vessel_write_file` | `path: string`, `content: string`, `overwrite?: bool` | Atomically writes workspace file with auto-created parent directories and jail boundary verification. |
 | `vessel_list_dir` | `path?: string`, `recursive?: bool`, `max_depth?: int` | Lists workspace directory entries, skipping `.vessel` and `.git` ignores. |
+| `vessel_browse_url` | `url: string`, `wait_seconds?: int`, `include_links?: bool` | Visits URL in headless browser sandbox, rendering dynamic DOM and returning sanitized Markdown text. |
+| `vessel_screenshot` | `url: string`, `output_path?: string`, `full_page?: bool`, `width?: int`, `height?: int` | Captures PNG screenshot of web page into workspace sandbox. |
+| `vessel_extract_page` | `url: string` | Extracts structured interactive affordances (headings, links, inputs, buttons) as JSON. |
 
 ---
 

@@ -48,6 +48,8 @@ const (
 	ImageAgentAlpine = "vessel-agent:alpine"
 	// ImageAgentUbuntu is the comprehensive developer Vessel AgentOS image.
 	ImageAgentUbuntu = "vessel-agent:ubuntu"
+	// ImageAgentBrowser is the headless browser Vessel AgentOS image.
+	ImageAgentBrowser = "vessel-agent:browser"
 )
 
 // ResolveImageAlias resolves friendly shorthand aliases to full Docker image tags.
@@ -57,6 +59,8 @@ func ResolveImageAlias(aliasOrName string) string {
 		return ImageAgentAlpine
 	case "ubuntu", "ubuntu-agent":
 		return ImageAgentUbuntu
+	case "browser", "browser-agent":
+		return ImageAgentBrowser
 	case "alpine", "alpine-raw":
 		return ImageAlpineRaw
 	case "":

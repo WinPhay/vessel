@@ -41,8 +41,14 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	reqRead := `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"vessel_read_file","arguments":{"path":"hello.txt"}}}` + "\n"
 	// Step 9: Send 'tools/call' for vessel_list_dir
 	reqListDir := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"vessel_list_dir","arguments":{}}}` + "\n"
+	// Step 10: Send 'tools/call' for vessel_browse_url
+	reqBrowse := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"vessel_browse_url","arguments":{"url":"https://example.com"}}}` + "\n"
+	// Step 11: Send 'tools/call' for vessel_screenshot
+	reqScreen := `{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"vessel_screenshot","arguments":{"url":"https://example.com","output_path":"screen.png"}}}` + "\n"
+	// Step 12: Send 'tools/call' for vessel_extract_page
+	reqExtract := `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"vessel_extract_page","arguments":{"url":"https://example.com"}}}` + "\n"
 
-	inBuf.WriteString(reqInit + reqList + reqExec + reqCP + reqRB + reqStatus + reqWrite + reqRead + reqListDir)
+	inBuf.WriteString(reqInit + reqList + reqExec + reqCP + reqRB + reqStatus + reqWrite + reqRead + reqListDir + reqBrowse + reqScreen + reqExtract)
 
 	ctx := context.Background()
 	err = server.Serve(ctx)
@@ -51,8 +57,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(outBuf.String()), "\n")
-	if len(lines) != 9 {
-		t.Fatalf("expected 9 responses, got %d:\n%s", len(lines), outBuf.String())
+	if len(lines) != 12 {
+		t.Fatalf("expected 12 responses, got %d:\n%s", len(lines), outBuf.String())
 	}
 
 	// Verify initialize response
@@ -72,8 +78,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 7 {
-		t.Errorf("expected 7 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 10 {
+		t.Errorf("expected 10 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -137,6 +143,33 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	if resp9.Error != nil {
 		t.Errorf("unexpected error on vessel_list_dir: %v", resp9.Error)
+	}
+
+	// Verify vessel_browse_url response
+	var resp10 JSONRPCResponse
+	if err := json.Unmarshal([]byte(lines[9]), &resp10); err != nil {
+		t.Fatalf("failed to parse resp10: %v", err)
+	}
+	if resp10.Error != nil {
+		t.Errorf("unexpected error on vessel_browse_url: %v", resp10.Error)
+	}
+
+	// Verify vessel_screenshot response
+	var resp11 JSONRPCResponse
+	if err := json.Unmarshal([]byte(lines[10]), &resp11); err != nil {
+		t.Fatalf("failed to parse resp11: %v", err)
+	}
+	if resp11.Error != nil {
+		t.Errorf("unexpected error on vessel_screenshot: %v", resp11.Error)
+	}
+
+	// Verify vessel_extract_page response
+	var resp12 JSONRPCResponse
+	if err := json.Unmarshal([]byte(lines[11]), &resp12); err != nil {
+		t.Fatalf("failed to parse resp12: %v", err)
+	}
+	if resp12.Error != nil {
+		t.Errorf("unexpected error on vessel_extract_page: %v", resp12.Error)
 	}
 }
 

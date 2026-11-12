@@ -1,0 +1,40 @@
+# Vessel AgentOS - Headless Browser Agent Image
+# Includes headless Chromium, curl, python3, and development tools for web testing & inspection.
+FROM ubuntu:24.04
+
+# Prevent interactive prompts during apt install
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    coreutils \
+    git \
+    curl \
+    jq \
+    ripgrep \
+    python3 \
+    ca-certificates \
+    chromium-browser \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libx11-xcb1 \
+    libdrm2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2t64 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Enforce non-interactive execution invariants for LLM drivers
+ENV TERM=dumb \
+    PAGER=cat \
+    GIT_PAGER=cat \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /workspace
+
+CMD ["sh", "-c", "while true; do sleep 3600; done"]
