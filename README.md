@@ -1,5 +1,8 @@
 # Vessel
 
+[![CI](https://github.com/WinPhay/vessel/actions/workflows/ci.yml/badge.svg)](https://github.com/WinPhay/vessel/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/WinPhay/vessel)](https://goreportcard.com/report/github.com/WinPhay/vessel)
+
 > **The local, time-traveling sandbox engine for autonomous AI agents.**
 
 Vessel creates an isolated, disposable execution environment for AI coding agents. Run autonomous agents locally with zero fear of host file destruction, leaked `.env` credentials, or corrupted system packages.
