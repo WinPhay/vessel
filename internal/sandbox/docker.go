@@ -32,6 +32,7 @@ type DockerSandbox struct {
 	cfg         DockerSandboxConfig
 	mu          sync.RWMutex
 	checkpoints map[string]string // tag -> imageID
+	snapshotMgr *SnapshotManager
 	closed      bool
 }
 
@@ -79,11 +80,19 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		return nil, err
 	}
 
+	snapMgr, err := NewSnapshotManager(cfg.WorkspacePath)
+	if err != nil {
+		// Clean up container if snapshot manager initialization fails
+		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+		return nil, fmt.Errorf("failed to initialize workspace snapshot manager: %w", err)
+	}
+
 	return &DockerSandbox{
 		cli:         cli,
 		containerID: containerID,
 		cfg:         cfg,
 		checkpoints: make(map[string]string),
+		snapshotMgr: snapMgr,
 	}, nil
 }
 
@@ -192,7 +201,7 @@ func (d *DockerSandbox) Exec(ctx context.Context, cmd string) (*ExecResult, erro
 	}, nil
 }
 
-// Checkpoint captures the current container state as a tagged image.
+// Checkpoint captures the current container state as a tagged image and snapshots the workspace directory.
 func (d *DockerSandbox) Checkpoint(ctx context.Context, tag string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -201,6 +210,14 @@ func (d *DockerSandbox) Checkpoint(ctx context.Context, tag string) error {
 		return ErrSandboxClosed
 	}
 
+	// 1. Snapshot the host workspace filesystem state
+	if d.snapshotMgr != nil {
+		if err := d.snapshotMgr.CreateSnapshot(tag); err != nil {
+			return fmt.Errorf("failed to create workspace snapshot %s: %w", tag, err)
+		}
+	}
+
+	// 2. Commit the container rootfs state
 	commitOpts := container.CommitOptions{
 		Reference: fmt.Sprintf("vessel-checkpoint:%s", tag),
 		Comment:   fmt.Sprintf("Vessel snapshot for tag %s", tag),
@@ -215,7 +232,7 @@ func (d *DockerSandbox) Checkpoint(ctx context.Context, tag string) error {
 	return nil
 }
 
-// Rollback restores the container to the snapshot associated with the tag.
+// Rollback restores the container to the snapshot associated with the tag and restores the workspace directory.
 func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -229,12 +246,19 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 		return ErrCheckpointNotFound
 	}
 
-	// Stop and remove current corrupted container
+	// 1. Restore the host workspace directory state
+	if d.snapshotMgr != nil {
+		if err := d.snapshotMgr.RestoreSnapshot(tag); err != nil {
+			return fmt.Errorf("failed to restore workspace snapshot %s: %w", tag, err)
+		}
+	}
+
+	// 2. Stop and remove current corrupted container
 	stopTimeout := 5
 	_ = d.cli.ContainerStop(ctx, d.containerID, container.StopOptions{Timeout: &stopTimeout})
 	_ = d.cli.ContainerRemove(ctx, d.containerID, container.RemoveOptions{Force: true})
 
-	// Spin up a fresh container using the checkpoint image with same workspace volume
+	// 3. Spin up a fresh container using the checkpoint image with same workspace volume
 	newContainerName := fmt.Sprintf("%s-rollback-%d", d.cfg.ContainerName, time.Now().UnixNano())
 	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath)
 	if err != nil {
