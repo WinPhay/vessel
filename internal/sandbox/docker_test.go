@@ -24,6 +24,21 @@ func TestDefaultDockerConfig(t *testing.T) {
 	if cfg.MaxOutputSize <= 0 {
 		t.Errorf("expected MaxOutputSize > 0, got: %d", cfg.MaxOutputSize)
 	}
+	if cfg.NetworkMode != "bridge" {
+		t.Errorf("expected default network bridge, got: %s", cfg.NetworkMode)
+	}
+}
+
+func TestDockerSandbox_NetworkConfig(t *testing.T) {
+	cfg := DefaultDockerConfig("/tmp")
+	if cfg.NetworkMode != "bridge" {
+		t.Errorf("expected default NetworkMode 'bridge', got %q", cfg.NetworkMode)
+	}
+
+	cfg.NetworkMode = "none"
+	if cfg.NetworkMode != "none" {
+		t.Errorf("expected NetworkMode 'none', got %q", cfg.NetworkMode)
+	}
 }
 
 func TestResolveImageAlias(t *testing.T) {

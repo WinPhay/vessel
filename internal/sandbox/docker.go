@@ -24,6 +24,7 @@ type DockerSandboxConfig struct {
 	WorkspacePath string
 	ContainerName string
 	MaxOutputSize int
+	NetworkMode   string
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -73,12 +74,16 @@ func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 		WorkspacePath: absPath,
 		ContainerName: fmt.Sprintf("vessel-sandbox-%d", time.Now().UnixNano()),
 		MaxOutputSize: 100 * 1024, // 100 KB
+		NetworkMode:   "bridge",
 	}
 }
 
 // NewDockerSandbox creates and starts an isolated container with /workspace mounted.
 func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.CommonAPIClient) (*DockerSandbox, error) {
 	cfg.ImageName = ResolveImageAlias(cfg.ImageName)
+	if cfg.NetworkMode == "" {
+		cfg.NetworkMode = "bridge"
+	}
 
 	var err error
 	if cli == nil {
@@ -103,7 +108,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		_ = reader.Close()
 	}
 
-	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath)
+	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +129,11 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 	}, nil
 }
 
-func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath string) (string, error) {
+func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string) (string, error) {
+	if networkMode == "" {
+		networkMode = "bridge"
+	}
+
 	containerCfg := &container.Config{
 		Image:        imageName,
 		Cmd:          []string{"sh", "-c", "while true; do sleep 3600; done"},
@@ -144,7 +153,7 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		Binds: []string{
 			fmt.Sprintf("%s:/workspace:rw", workspacePath),
 		},
-		NetworkMode: "bridge",
+		NetworkMode: container.NetworkMode(networkMode),
 	}
 
 	resp, err := cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
@@ -288,7 +297,7 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 
 	// 3. Spin up a fresh container using the checkpoint image with same workspace volume
 	newContainerName := fmt.Sprintf("%s-rollback-%d", d.cfg.ContainerName, time.Now().UnixNano())
-	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath)
+	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode)
 	if err != nil {
 		return fmt.Errorf("failed to restore container from checkpoint %s: %w", tag, err)
 	}
