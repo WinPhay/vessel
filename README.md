@@ -21,6 +21,7 @@ If you are an AI assistant or coding agent working in this repository, see [`AGE
 - **Network Isolation**: Supports complete airgap mode (`--network none`) to block LLM credential exfiltration.
 - **Time-Travel Rollbacks**: Create instant filesystem checkpoints (`vessel_checkpoint`) and restore them (`vessel_rollback`) in sub-second time.
 - **Native MCP Interface**: Plugs directly into Claude Desktop, Cursor, Antigravity, and Cline over stdio Model Context Protocol.
+- **Secret Redaction & DLP Vault**: Automatic egress redaction for OpenAI, Anthropic, AWS, GitHub, GCP, Slack, private keys, database URLs, and high-entropy secrets. Inject real credentials (`--secret KEY=VALUE`) for authenticated agent tasks with zero exfiltration risk to the LLM.
 - **Token Scrubber**: Strips ANSI escape codes, eliminates interactive terminal hangs, and formats structured execution receipts.
 
 ---

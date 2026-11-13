@@ -32,7 +32,7 @@ Host Environment (Developer Workstation)
 1. **Host-Isolation Invariant**: Untrusted commands executed via Vessel MUST NEVER run on the host OS directly. Commands are strictly dispatched inside the sandbox container.
 2. **Mount Jail Invariant**: Only the targeted working directory is mounted into the container at `/workspace`. Host root, `~/.ssh`, `~/.bashrc`, and cloud credentials must never be mounted.
 3. **Atomic Time-Travel Invariant**: Checkpointing a sandbox state produces an immutable snapshot tag. Calling rollback restores the exact filesystem snapshot in <1s.
-4. **Token-Hygiene Invariant**: All raw command stdout/stderr must pass through the token scrubber before returning to the MCP client. ANSI codes, binary garbage, and terminal escapes are stripped to protect LLM context windows.
+4. **Token-Hygiene & Zero-Leak Invariant**: All raw command stdout/stderr, process output, grep results, and file reads must pass through the token scrubber and secret vault before returning to the MCP client. ANSI codes, terminal escapes, and sensitive credentials (API keys, private keys, database URLs, high-entropy tokens, registered secrets) are stripped and redacted to guarantee zero secret egress.
 5. **Resource-Bounding Invariant**: Containers strictly enforce configurable kernel cgroup limits (`MemoryBytes`, `NanoCPUs`) to prevent infinite recursion, memory leaks, or CPU starvation on the host system.
 
 ---

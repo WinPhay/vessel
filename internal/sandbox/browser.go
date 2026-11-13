@@ -352,6 +352,7 @@ fi
 
 	title := ExtractTitle(rawOutput)
 	markdown := HTMLToMarkdown(rawOutput, includeLinks)
+	markdown = tokenfilter.CleanOutput(markdown)
 
 	// Token cap (50KB max ~ 12.5k tokens) to prevent context flooding
 	truncated := false

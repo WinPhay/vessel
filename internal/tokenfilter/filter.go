@@ -8,12 +8,21 @@ import (
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[()][AB012]`)
 
-// CleanOutput strips ANSI escape sequences, normalizes line endings, and cleans terminal artifacts.
-func CleanOutput(raw string) string {
+// CleanANSI strips ANSI escape sequences and normalizes line endings without redacting secrets.
+func CleanANSI(raw string) string {
 	cleaned := ansiRegex.ReplaceAllString(raw, "")
 	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
 	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
 	return strings.TrimSpace(cleaned)
+}
+
+// CleanOutput strips ANSI escape sequences, normalizes line endings, and redacts sensitive secrets.
+func CleanOutput(raw string) string {
+	cleaned := ansiRegex.ReplaceAllString(raw, "")
+	cleaned = strings.ReplaceAll(cleaned, "\r\n", "\n")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
+	redacted := DefaultVault().Redact(cleaned)
+	return strings.TrimSpace(redacted)
 }
 
 // EstimateTokens provides a lightweight token estimate (standard 4 chars per token heuristic).

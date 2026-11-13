@@ -159,6 +159,7 @@ func ReadFile(workspaceRoot, userPath string, startLine, endLine int) (*ReadFile
 
 	selected := allLines[start-1 : end]
 	content := strings.Join(selected, "\n")
+	content = tokenfilter.CleanOutput(content)
 	tokenEst := tokenfilter.EstimateTokens(content)
 
 	return &ReadFileResult{

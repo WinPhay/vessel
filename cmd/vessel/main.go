@@ -51,6 +51,17 @@ func main() {
 	}
 }
 
+type multiStringFlag []string
+
+func (m *multiStringFlag) String() string {
+	return strings.Join(*m, ",")
+}
+
+func (m *multiStringFlag) Set(value string) error {
+	*m = append(*m, value)
+	return nil
+}
+
 func parseInterspersed(flags *flag.FlagSet, args []string) error {
 	var flagArgs []string
 	var nonFlagArgs []string
@@ -86,18 +97,25 @@ func runExec(args []string) {
 	memStr := execFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	cpus := execFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
 	runtime := execFlags.String("runtime", "", "OCI container runtime (e.g. 'runc', 'runsc' for gVisor)")
+	var secrets multiStringFlag
+	execFlags.Var(&secrets, "secret", "Custom secret to inject and redact in form KEY=VALUE (repeatable)")
+	maskSecrets := execFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: vessel exec requires a command to run inside the sandbox")
-		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] [--runtime <runtime>] \"<command>\"")
+		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] [--runtime <runtime>] [--secret <KEY=VAL>] [--mask-secrets] \"<command>\"")
 		os.Exit(1)
 	}
 
 	cmdToRun := remaining[0]
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if !*maskSecrets {
+		tokenfilter.SetSecretMasking(false)
+	}
 
 	cfg := sandbox.DefaultDockerConfig(*workspace)
 	if *image != "" {
@@ -120,8 +138,12 @@ func runExec(args []string) {
 	if *runtime != "" {
 		cfg.Runtime = *runtime
 	}
-	if *runtime != "" {
-		cfg.Runtime = *runtime
+	for _, s := range secrets {
+		parts := strings.SplitN(s, "=", 2)
+		if len(parts) == 2 {
+			cfg.Secrets[parts[0]] = parts[1]
+			tokenfilter.RegisterSecret(parts[0], parts[1])
+		}
 	}
 
 	runtimeDesc := cfg.Runtime
@@ -166,11 +188,18 @@ func runMCP(args []string) {
 	memStr := mcpFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	cpus := mcpFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
 	runtime := mcpFlags.String("runtime", "", "OCI container runtime (e.g. 'runc', 'runsc' for gVisor)")
+	var secrets multiStringFlag
+	mcpFlags.Var(&secrets, "secret", "Custom secret to inject and redact in form KEY=VALUE (repeatable)")
+	maskSecrets := mcpFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = parseInterspersed(mcpFlags, args)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if !*maskSecrets {
+		tokenfilter.SetSecretMasking(false)
+	}
 
 	var sb sandbox.Sandbox
 	cfg := sandbox.DefaultDockerConfig(*workspace)
@@ -193,6 +222,13 @@ func runMCP(args []string) {
 	}
 	if *runtime != "" {
 		cfg.Runtime = *runtime
+	}
+	for _, s := range secrets {
+		parts := strings.SplitN(s, "=", 2)
+		if len(parts) == 2 {
+			cfg.Secrets[parts[0]] = parts[1]
+			tokenfilter.RegisterSecret(parts[0], parts[1])
+		}
 	}
 
 	if *useMock {
@@ -464,9 +500,9 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  exec        Execute a command inside the sandbox container")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --mask-secrets")
 	fmt.Println("  mcp         Start stdio Model Context Protocol server")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --mock")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --mask-secrets, --mock")
 	fmt.Println("  process     Manage background container processes")
 	fmt.Println("              Usage: vessel process [list | kill <id> | logs <id>] [--workspace <dir>]")
 	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
@@ -497,4 +533,8 @@ func printUsage() {
 	fmt.Println("  runc        Standard OCI container runtime (default)")
 	fmt.Println("  runsc       Google gVisor application-kernel sandbox for hostile code isolation")
 	fmt.Println("  kata        Kata Containers lightweight VM runtime")
+	fmt.Println()
+	fmt.Println("Secret & DLP Masking:")
+	fmt.Println("  --secret        Inject environment secret into container and redact on egress (e.g. '--secret API_KEY=xyz')")
+	fmt.Println("  --mask-secrets  Enable automatic secret redaction and masking (default: true)")
 }

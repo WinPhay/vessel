@@ -59,6 +59,9 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "runsc") || !strings.Contains(stdout, "OCI Runtimes") {
 		t.Errorf("usage missing runtime documentation: %s", stdout)
 	}
+	if !strings.Contains(stdout, "--secret") || !strings.Contains(stdout, "--mask-secrets") {
+		t.Errorf("usage missing secret masking documentation: %s", stdout)
+	}
 }
 
 func TestCLI_CheckpointAndRollback(t *testing.T) {

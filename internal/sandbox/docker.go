@@ -27,8 +27,10 @@ type DockerSandboxConfig struct {
 	MaxOutputSize int
 	NetworkMode   string
 	MemoryBytes   int64   // Memory limit in bytes (0 = unlimited)
-	CPUShares     float64 // CPU cores (e.g., 1.5, 2.0; 0 = unlimited)
-	Runtime       string  // OCI runtime (e.g., "runc", "runsc" for gVisor; empty = daemon default)
+	CPUShares     float64           // CPU cores (e.g., 1.5, 2.0; 0 = unlimited)
+	Runtime       string            // OCI runtime (e.g., "runc", "runsc" for gVisor; empty = daemon default)
+	Env           []string          // Custom environment variables (KEY=VALUE)
+	Secrets       map[string]string // Secrets to inject into container and register for redaction (KEY -> VALUE)
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -124,6 +126,8 @@ func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 		MemoryBytes:   0,
 		CPUShares:     0,
 		Runtime:       "",
+		Env:           nil,
+		Secrets:       make(map[string]string),
 	}
 }
 
@@ -157,7 +161,14 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		_ = reader.Close()
 	}
 
-	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime)
+	var combinedEnv []string
+	combinedEnv = append(combinedEnv, cfg.Env...)
+	for k, v := range cfg.Secrets {
+		combinedEnv = append(combinedEnv, fmt.Sprintf("%s=%s", k, v))
+		tokenfilter.RegisterSecret(k, v)
+	}
+
+	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime, combinedEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -179,10 +190,18 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 	}, nil
 }
 
-func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string) (string, error) {
+func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string, customEnv []string) (string, error) {
 	if networkMode == "" {
 		networkMode = "bridge"
 	}
+
+	containerEnv := []string{
+		"DEBIAN_FRONTEND=noninteractive",
+		"GIT_PAGER=cat",
+		"PAGER=cat",
+		"TERM=dumb",
+	}
+	containerEnv = append(containerEnv, customEnv...)
 
 	containerCfg := &container.Config{
 		Image:        imageName,
@@ -191,12 +210,7 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		Tty:          false,
 		AttachStdout: true,
 		AttachStderr: true,
-		Env: []string{
-			"DEBIAN_FRONTEND=noninteractive",
-			"GIT_PAGER=cat",
-			"PAGER=cat",
-			"TERM=dumb",
-		},
+		Env:          containerEnv,
 	}
 
 	res := container.Resources{}
@@ -373,7 +387,12 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 
 	// 3. Spin up a fresh container using the checkpoint image with same workspace volume
 	newContainerName := fmt.Sprintf("%s-rollback-%d", d.cfg.ContainerName, time.Now().UnixNano())
-	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime)
+	var combinedEnv []string
+	combinedEnv = append(combinedEnv, d.cfg.Env...)
+	for k, v := range d.cfg.Secrets {
+		combinedEnv = append(combinedEnv, fmt.Sprintf("%s=%s", k, v))
+	}
+	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime, combinedEnv)
 	if err != nil {
 		return fmt.Errorf("failed to restore container from checkpoint %s: %w", tag, err)
 	}
