@@ -10,21 +10,21 @@ import (
 
 var (
 	// Known credential patterns
-	anthropicPattern = regexp.MustCompile(`\bsk-ant-[a-zA-Z0-9_\-]{20,}\b`)
-	openAIPattern = regexp.MustCompile(`\bsk-(?:proj-)?[a-zA-Z0-9_\-]{20,}\b`)
-	awsKeyPattern = regexp.MustCompile(`\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b`)
-	awsSecretPattern = regexp.MustCompile(`(?i)(?:aws_secret_access_key|aws_secret_key|secret_key)\s*[:=]\s*["']?([a-zA-Z0-9/+=]{40})["']?`)
-	githubPatPattern = regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36,255}\b`)
-	githubFineGrainedPattern = regexp.MustCompile(`\bgithub_pat_[a-zA-Z0-9_]{82}\b`)
-	googleAPIKeyPattern = regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}\b`)
-	slackTokenPattern = regexp.MustCompile(`\bxox[baprs]-[0-9a-zA-Z\-]{10,80}\b`)
-	huggingFacePattern = regexp.MustCompile(`\bhf_[a-zA-Z0-9]{34,}\b`)
-	jwtPattern = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`)
-	bearerPattern = regexp.MustCompile(`(?i)\bBearer\s+([a-zA-Z0-9_\-\.]{24,})\b`)
-	privateKeyPattern = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----`)
-	databaseURLPattern = regexp.MustCompile(`(?i)\b(postgres|postgresql|mysql|mongodb|redis|amqp)://([^:\s/]+):([^/\r\n]+)@([a-zA-Z0-9_\-\.]+(?::[0-9]+)?(?:/[^\s"']*)?)`)
+	anthropicPattern            = regexp.MustCompile(`\bsk-ant-[a-zA-Z0-9_\-]{20,}\b`)
+	openAIPattern               = regexp.MustCompile(`\bsk-(?:proj-)?[a-zA-Z0-9_\-]{20,}\b`)
+	awsKeyPattern               = regexp.MustCompile(`\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b`)
+	awsSecretPattern            = regexp.MustCompile(`(?i)(?:aws_secret_access_key|aws_secret_key|secret_key)\s*[:=]\s*["']?([a-zA-Z0-9/+=]{40})["']?`)
+	githubPatPattern            = regexp.MustCompile(`\b(?:ghp|gho|ghu|ghs|ghr)_[a-zA-Z0-9]{36,255}\b`)
+	githubFineGrainedPattern    = regexp.MustCompile(`\bgithub_pat_[a-zA-Z0-9_]{82}\b`)
+	googleAPIKeyPattern         = regexp.MustCompile(`\bAIza[0-9A-Za-z\-_]{35}\b`)
+	slackTokenPattern           = regexp.MustCompile(`\bxox[baprs]-[0-9a-zA-Z\-]{10,80}\b`)
+	huggingFacePattern          = regexp.MustCompile(`\bhf_[a-zA-Z0-9]{34,}\b`)
+	jwtPattern                  = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`)
+	bearerPattern               = regexp.MustCompile(`(?i)\bBearer\s+([a-zA-Z0-9_\-\.]{24,})\b`)
+	privateKeyPattern           = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----`)
+	databaseURLPattern          = regexp.MustCompile(`(?i)\b(postgres|postgresql|mysql|mongodb|redis|amqp)://([^:\s/]+):([^/\r\n]+)@([a-zA-Z0-9_\-\.]+(?::[0-9]+)?(?:/[^\s"']*)?)`)
 	highEntropyCandidatePattern = regexp.MustCompile(`\b[a-zA-Z0-9_\-+/=]{32,128}\b`)
-	gitHashPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	gitHashPattern              = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
 // Vault manages registered secrets and runs redaction passes over text.
@@ -36,7 +36,7 @@ type Vault struct {
 
 // Global default vault used by CleanOutput
 var (
-	defaultVaultOnce sync.Once
+	defaultVaultOnce     sync.Once
 	defaultVaultInstance *Vault
 )
 

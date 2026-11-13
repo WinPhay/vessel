@@ -26,7 +26,7 @@ type DockerSandboxConfig struct {
 	ContainerName string
 	MaxOutputSize int
 	NetworkMode   string
-	MemoryBytes   int64   // Memory limit in bytes (0 = unlimited)
+	MemoryBytes   int64             // Memory limit in bytes (0 = unlimited)
 	CPUShares     float64           // CPU cores (e.g., 1.5, 2.0; 0 = unlimited)
 	Runtime       string            // OCI runtime (e.g., "runc", "runsc" for gVisor; empty = daemon default)
 	Env           []string          // Custom environment variables (KEY=VALUE)
