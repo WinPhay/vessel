@@ -79,8 +79,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 19 {
-		t.Errorf("expected 19 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 22 {
+		t.Errorf("expected 22 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -411,5 +411,58 @@ func TestMCPServerServiceTools(t *testing.T) {
 	stopText := stopContent[0].(map[string]any)["text"].(string)
 	if !strings.Contains(stopText, "stopped and removed successfully") {
 		t.Errorf("unexpected stop response: %s", stopText)
+	}
+}
+
+func TestMCPServerWorktreeTools(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	var inBuf, outBuf bytes.Buffer
+
+	server := NewServer(mockSB, ".", &inBuf, &outBuf)
+	ctx := context.Background()
+
+	// 1. vessel_worktree_status
+	reqStatus := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_worktree_status","arguments":{}}}` + "\n"
+	inBuf.WriteString(reqStatus)
+	_ = server.Serve(ctx)
+
+	var respStatus JSONRPCResponse
+	line, err := outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respStatus) != nil || respStatus.Error != nil {
+		t.Fatalf("vessel_worktree_status failed: line=%s, err=%v", line, respStatus.Error)
+	}
+
+	resultMap := respStatus.Result.(map[string]any)
+	contentList := resultMap["content"].([]any)
+	firstContent := contentList[0].(map[string]any)
+	textJSON := firstContent["text"].(string)
+
+	var wtStatus sandbox.WorktreeStatusResult
+	_ = json.Unmarshal([]byte(textJSON), &wtStatus)
+	if wtStatus.WorktreePath == "" {
+		t.Errorf("expected non-empty worktree path in status response")
+	}
+
+	// 2. vessel_worktree_diff
+	outBuf.Reset()
+	inBuf.Reset()
+	reqDiff := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vessel_worktree_diff","arguments":{"max_bytes":1000}}}` + "\n"
+	inBuf.WriteString(reqDiff)
+	_ = server.Serve(ctx)
+
+	var respDiff JSONRPCResponse
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respDiff) != nil || respDiff.Error != nil {
+		t.Fatalf("vessel_worktree_diff failed: line=%s, err=%v", line, respDiff.Error)
+	}
+
+	diffMap := respDiff.Result.(map[string]any)
+	diffContent := diffMap["content"].([]any)
+	diffText := diffContent[0].(map[string]any)["text"].(string)
+
+	var wtDiff sandbox.WorktreeDiffResult
+	_ = json.Unmarshal([]byte(diffText), &wtDiff)
+	if wtDiff.TokenEstimate < 0 {
+		t.Errorf("invalid token estimate: %d", wtDiff.TokenEstimate)
 	}
 }

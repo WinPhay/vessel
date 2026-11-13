@@ -65,6 +65,9 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "service") || !strings.Contains(stdout, "--service") {
 		t.Errorf("usage missing sidecar service documentation: %s", stdout)
 	}
+	if !strings.Contains(stdout, "worktree") || !strings.Contains(stdout, "--worktree") {
+		t.Errorf("usage missing git worktree shield documentation: %s", stdout)
+	}
 }
 
 func TestCLI_CheckpointAndRollback(t *testing.T) {
@@ -194,5 +197,40 @@ func TestCLI_ServiceSubcommand(t *testing.T) {
 
 	if !strings.Contains(stdout, "Active Sidecar Services") {
 		t.Errorf("expected service list header, got: %s", stdout)
+	}
+}
+
+func TestCLI_WorktreeSubcommand(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-cli-worktree-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 1. Status on non-git dir
+	stdout, _ := captureOutput(func() {
+		runWorktree([]string{"status", "--workspace", tempDir})
+	})
+	if !strings.Contains(stdout, "Git Worktree Status") {
+		t.Errorf("expected worktree status header, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "not inside a Git repository") {
+		t.Errorf("expected inactive notice, got: %s", stdout)
+	}
+
+	// 2. Status with default arg
+	stdout, _ = captureOutput(func() {
+		runWorktree([]string{"--workspace", tempDir})
+	})
+	if !strings.Contains(stdout, "Git Worktree Status") {
+		t.Errorf("expected worktree status header with default arg, got: %s", stdout)
+	}
+
+	// 3. Diff on non-git dir
+	stdout, _ = captureOutput(func() {
+		runWorktree([]string{"diff", "--workspace", tempDir})
+	})
+	if !strings.Contains(stdout, "not inside a Git repository") {
+		t.Errorf("expected not inside git repo message, got: %s", stdout)
 	}
 }

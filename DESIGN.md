@@ -34,12 +34,13 @@ Host Environment (Developer Workstation)
 3. **Atomic Time-Travel Invariant**: Checkpointing a sandbox state produces an immutable snapshot tag. Calling rollback restores the exact filesystem snapshot in <1s.
 4. **Token-Hygiene & Zero-Leak Invariant**: All raw command stdout/stderr, process output, grep results, and file reads must pass through the token scrubber and secret vault before returning to the MCP client. ANSI codes, terminal escapes, and sensitive credentials (API keys, private keys, database URLs, high-entropy tokens, registered secrets) are stripped and redacted to guarantee zero secret egress.
 5. **Resource-Bounding Invariant**: Containers strictly enforce configurable kernel cgroup limits (`MemoryBytes`, `NanoCPUs`) to prevent infinite recursion, memory leaks, or CPU starvation on the host system.
+6. **Git Worktree Shield Invariant**: When `--worktree` is enabled, the agent executes within an ephemeral Git worktree located at `.vessel/worktrees/vessel-<session>` on an isolated session branch. The developer's primary working tree remains 100% clean and untouched. Modifications can be reviewed via `vessel_worktree_diff` and committed via `vessel_worktree_commit` or discarded automatically on session termination.
 
 ---
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 19 core tools over the Model Context Protocol:
+Vessel exposes 22 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
@@ -62,6 +63,9 @@ Vessel exposes 19 core tools over the Model Context Protocol:
 | `vessel_spawn_service` | `name: string`, `image: string`, `env?: object`, `command?: string` | Spawns an isolated sidecar container on the session network; reachable via internal DNS `name:port`. |
 | `vessel_stop_service` | `name: string` | Stops and removes an active sidecar service from the session mesh. |
 | `vessel_list_services` | *(none)* | Returns status, image, uptime, and hostnames for all active sidecars. |
+| `vessel_worktree_status` | *(none)* | Returns Git worktree status, current branch, base branch, modified and untracked file lists. |
+| `vessel_worktree_diff` | `max_bytes?: int` | Returns unified diff against HEAD within the isolated worktree, token estimate, and file change metrics. |
+| `vessel_worktree_commit` | `message: string`, `author_name?: string`, `author_email?: string` | Stages all changes and commits them within the session worktree branch with custom or default author metadata. |
 
 ---
 

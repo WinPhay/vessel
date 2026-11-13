@@ -534,6 +534,49 @@ func (s *Server) getToolsList() []Tool {
 				"properties": map[string]any{},
 			},
 		},
+		{
+			Name:        "vessel_worktree_status",
+			Description: "Returns Git worktree status, current branch, and modified/untracked files.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        "vessel_worktree_diff",
+			Description: "Returns unified diff of all modifications made within the isolated worktree against base HEAD.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"max_bytes": map[string]any{
+						"type":        "integer",
+						"description": "Optional maximum bytes of diff to return (default: unlimited).",
+					},
+				},
+			},
+		},
+		{
+			Name:        "vessel_worktree_commit",
+			Description: "Commits staged and modified changes inside the isolated Git worktree branch.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"message": map[string]any{
+						"type":        "string",
+						"description": "Commit message describing the modifications.",
+					},
+					"author_name": map[string]any{
+						"type":        "string",
+						"description": "Optional author name for git commit.",
+					},
+					"author_email": map[string]any{
+						"type":        "string",
+						"description": "Optional author email for git commit.",
+					},
+				},
+				"required": []string{"message"},
+			},
+		},
 	}
 }
 
@@ -955,6 +998,47 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 		}
 
 		payload, _ := json.MarshalIndent(services, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_worktree_status":
+		status, err := s.sb.WorktreeStatus(ctx)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to get worktree status: %v", err))
+		}
+
+		payload, _ := json.MarshalIndent(status, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_worktree_diff":
+		var args struct {
+			MaxBytes int `json:"max_bytes"`
+		}
+		_ = json.Unmarshal(callParams.Arguments, &args)
+
+		diffRes, err := s.sb.WorktreeDiff(ctx, args.MaxBytes)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to get worktree diff: %v", err))
+		}
+
+		payload, _ := json.MarshalIndent(diffRes, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_worktree_commit":
+		var args struct {
+			Message     string `json:"message"`
+			AuthorName  string `json:"author_name"`
+			AuthorEmail string `json:"author_email"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil || strings.TrimSpace(args.Message) == "" {
+			return s.toolErrorResponse(req.ID, "message parameter is required for vessel_worktree_commit")
+		}
+
+		res, err := s.sb.WorktreeCommit(ctx, args.Message, args.AuthorName, args.AuthorEmail)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to commit worktree: %v", err))
+		}
+
+		payload, _ := json.MarshalIndent(res, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))
 
 	default:

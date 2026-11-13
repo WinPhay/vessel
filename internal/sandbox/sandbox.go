@@ -51,6 +51,11 @@ type Sandbox interface {
 	SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error)
 	StopService(ctx context.Context, name string) error
 	ListServices(ctx context.Context) ([]*ServiceInfo, error)
+
+	// Worktree review gate methods
+	WorktreeStatus(ctx context.Context) (*WorktreeStatusResult, error)
+	WorktreeDiff(ctx context.Context, maxBytes int) (*WorktreeDiffResult, error)
+	WorktreeCommit(ctx context.Context, message, authorName, authorEmail string) (*WorktreeCommitResult, error)
 }
 
 // MockSandbox provides an in-memory test implementation of the Sandbox interface.
@@ -62,6 +67,7 @@ type MockSandbox struct {
 	mockExit    int
 	procMgr     *ProcessManager
 	svcMgr      *ServiceManager
+	wtMgr       *WorktreeManager
 }
 
 // NewMockSandbox creates an initialized MockSandbox.
@@ -126,7 +132,64 @@ func (m *MockSandbox) Close() error {
 	if m.svcMgr != nil {
 		_ = m.svcMgr.Close(context.Background())
 	}
+	if m.wtMgr != nil {
+		_ = m.wtMgr.Close()
+	}
 	return nil
+}
+
+func (m *MockSandbox) WorktreeStatus(ctx context.Context) (*WorktreeStatusResult, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	if m.wtMgr != nil {
+		return m.wtMgr.Status(ctx)
+	}
+	return &WorktreeStatusResult{
+		IsWorktree:     true,
+		Branch:         "vessel/session-mock",
+		BaseBranch:     "main",
+		WorktreePath:   "/tmp/vessel-mock-worktree",
+		ModifiedFiles:  []string{},
+		UntrackedFiles: []string{},
+		Clean:          true,
+	}, nil
+}
+
+func (m *MockSandbox) WorktreeDiff(ctx context.Context, maxBytes int) (*WorktreeDiffResult, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	if m.wtMgr != nil {
+		return m.wtMgr.Diff(ctx, maxBytes)
+	}
+	return &WorktreeDiffResult{
+		Diff:          "",
+		FilesChanged:  0,
+		Additions:     0,
+		Deletions:     0,
+		TokenEstimate: 0,
+		Truncated:     false,
+	}, nil
+}
+
+func (m *MockSandbox) WorktreeCommit(ctx context.Context, message, authorName, authorEmail string) (*WorktreeCommitResult, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	if m.wtMgr != nil {
+		return m.wtMgr.Commit(ctx, message, authorName, authorEmail)
+	}
+	return &WorktreeCommitResult{
+		CommitHash: "mock-commit-hash-12345678",
+		Branch:     "vessel/session-mock",
+		Message:    message,
+		FilesCount: 0,
+	}, nil
+}
+
+func (m *MockSandbox) SetWorktreeManager(wm *WorktreeManager) {
+	m.wtMgr = wm
 }
 
 func (m *MockSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error) {

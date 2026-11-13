@@ -31,6 +31,7 @@ type DockerSandboxConfig struct {
 	Runtime       string            // OCI runtime (e.g., "runc", "runsc" for gVisor; empty = daemon default)
 	Env           []string          // Custom environment variables (KEY=VALUE)
 	Secrets       map[string]string // Secrets to inject into container and register for redaction (KEY -> VALUE)
+	UseWorktree   bool              // Isolate session inside an ephemeral Git worktree
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -43,6 +44,7 @@ type DockerSandbox struct {
 	snapshotMgr *SnapshotManager
 	procMgr     *ProcessManager
 	svcMgr      *ServiceManager
+	wtMgr       *WorktreeManager
 	closed      bool
 }
 
@@ -174,8 +176,23 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		return nil, err
 	}
 
+	var wtMgr *WorktreeManager
+	if cfg.UseWorktree {
+		wm, err := NewWorktreeManager(cfg.WorkspacePath, cfg.ContainerName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize git worktree manager: %w", err)
+		}
+		wtMgr = wm
+		if wm.IsWorktree() {
+			cfg.WorkspacePath = wm.WorktreePath()
+		}
+	}
+
 	snapMgr, err := NewSnapshotManager(cfg.WorkspacePath)
 	if err != nil {
+		if wtMgr != nil {
+			_ = wtMgr.Close()
+		}
 		// Clean up container if snapshot manager initialization fails
 		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to initialize workspace snapshot manager: %w", err)
@@ -183,6 +200,9 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 
 	svcMgr, err := NewServiceManager(cli, containerID, cfg.ContainerName)
 	if err != nil {
+		if wtMgr != nil {
+			_ = wtMgr.Close()
+		}
 		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to initialize service manager: %w", err)
 	}
@@ -195,6 +215,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		snapshotMgr: snapMgr,
 		procMgr:     NewProcessManager(),
 		svcMgr:      svcMgr,
+		wtMgr:       wtMgr,
 	}, nil
 }
 
@@ -425,11 +446,56 @@ func (d *DockerSandbox) Close() error {
 	if d.svcMgr != nil {
 		_ = d.svcMgr.Close(context.Background())
 	}
+	if d.wtMgr != nil {
+		_ = d.wtMgr.Close()
+	}
 
 	stopTimeout := 2
 	_ = d.cli.ContainerStop(context.Background(), d.containerID, container.StopOptions{Timeout: &stopTimeout})
 	err := d.cli.ContainerRemove(context.Background(), d.containerID, container.RemoveOptions{Force: true})
 	return err
+}
+
+// WorktreeStatus returns current working tree status.
+func (d *DockerSandbox) WorktreeStatus(ctx context.Context) (*WorktreeStatusResult, error) {
+	d.mu.RLock()
+	closed := d.closed
+	d.mu.RUnlock()
+	if closed {
+		return nil, ErrSandboxClosed
+	}
+	if d.wtMgr == nil {
+		return &WorktreeStatusResult{IsWorktree: false, WorktreePath: d.cfg.WorkspacePath, Clean: true}, nil
+	}
+	return d.wtMgr.Status(ctx)
+}
+
+// WorktreeDiff returns the unified diff of changes made in the worktree.
+func (d *DockerSandbox) WorktreeDiff(ctx context.Context, maxBytes int) (*WorktreeDiffResult, error) {
+	d.mu.RLock()
+	closed := d.closed
+	d.mu.RUnlock()
+	if closed {
+		return nil, ErrSandboxClosed
+	}
+	if d.wtMgr == nil {
+		return &WorktreeDiffResult{Diff: "", TokenEstimate: 0}, nil
+	}
+	return d.wtMgr.Diff(ctx, maxBytes)
+}
+
+// WorktreeCommit commits changes staged in the worktree.
+func (d *DockerSandbox) WorktreeCommit(ctx context.Context, message, authorName, authorEmail string) (*WorktreeCommitResult, error) {
+	d.mu.RLock()
+	closed := d.closed
+	d.mu.RUnlock()
+	if closed {
+		return nil, ErrSandboxClosed
+	}
+	if d.wtMgr == nil {
+		return nil, fmt.Errorf("worktree isolation is not active for this session")
+	}
+	return d.wtMgr.Commit(ctx, message, authorName, authorEmail)
 }
 
 // SpawnService launches an isolated sidecar container on the session network.

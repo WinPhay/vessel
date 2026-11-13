@@ -22,6 +22,7 @@ If you are an AI assistant or coding agent working in this repository, see [`AGE
 - **Time-Travel Rollbacks**: Create instant filesystem checkpoints (`vessel_checkpoint`) and restore them (`vessel_rollback`) in sub-second time.
 - **Native MCP Interface**: Plugs directly into Claude Desktop, Cursor, Antigravity, and Cline over stdio Model Context Protocol.
 - **Ephemeral Service Mesh**: Run isolated database sidecars (PostgreSQL, Redis, MongoDB) on an internal session network (`vessel_spawn_service`, `--service db=postgres`) with zero host port exposure and automatic teardown on exit.
+- **Git Worktree Shield & Workspace Review Gate**: Protects the developer's primary working tree from rogue agent overwrites by mounting an isolated Git worktree (`--worktree`). Agents can stage, diff, and commit changes on an isolated session branch (`vessel_worktree_status`, `vessel_worktree_diff`, `vessel_worktree_commit`) without polluting the host working copy.
 - **Secret Redaction & DLP Vault**: Automatic egress redaction for OpenAI, Anthropic, AWS, GitHub, GCP, Slack, private keys, database URLs, and high-entropy secrets. Inject real credentials (`--secret KEY=VALUE`) for authenticated agent tasks with zero exfiltration risk to the LLM.
 - **Token Scrubber**: Strips ANSI escape codes, eliminates interactive terminal hangs, and formats structured execution receipts.
 
@@ -47,8 +48,15 @@ go test -v ./...
 
 ### CLI Commands
 ```bash
-# Execute isolated command inside sandbox (supports --network, --memory, and --cpus)
+# Execute isolated command inside sandbox (supports --network, --memory, --cpus, and --worktree)
 ./bin/vessel exec --workspace /path/to/project --memory 2g --cpus 1.5 --network none "npm test"
+
+# Execute inside an ephemeral Git worktree (zero host branch pollution)
+./bin/vessel exec --workspace /path/to/project --worktree "npm test"
+
+# Inspect active worktrees and changes
+./bin/vessel worktree status --workspace /path/to/project
+./bin/vessel worktree diff --workspace /path/to/project
 
 # Create a named filesystem snapshot
 ./bin/vessel checkpoint --workspace /path/to/project my-checkpoint
