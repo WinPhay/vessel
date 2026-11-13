@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,8 +79,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 14 {
-		t.Errorf("expected 14 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 16 {
+		t.Errorf("expected 16 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -272,5 +273,70 @@ func TestMCPServerProcessTools(t *testing.T) {
 	line, _ = outBuf.ReadString('\n')
 	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &respKill); err != nil || respKill.Error != nil {
 		t.Fatalf("vessel_kill_process failed: %v", respKill.Error)
+	}
+}
+
+func TestMCPServerSearchAndPatchTools(t *testing.T) {
+	tempWorkspace, err := os.MkdirTemp("", "vessel-mcp-search-patch-*")
+	if err != nil {
+		t.Fatalf("failed to create temp workspace: %v", err)
+	}
+	defer os.RemoveAll(tempWorkspace)
+
+	samplePath := filepath.Join(tempWorkspace, "code.txt")
+	_ = os.WriteFile(samplePath, []byte("alpha\nbeta\ngamma\n"), 0644)
+
+	mockSB := sandbox.NewMockSandbox()
+	var inBuf, outBuf bytes.Buffer
+	server := NewServer(mockSB, tempWorkspace, &inBuf, &outBuf)
+	ctx := context.Background()
+
+	// 1. Test vessel_grep
+	reqGrep := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_grep","arguments":{"pattern":"beta"}}}` + "\n"
+	inBuf.WriteString(reqGrep)
+	_ = server.Serve(ctx)
+
+	var respGrep JSONRPCResponse
+	line, err := outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respGrep) != nil || respGrep.Error != nil {
+		t.Fatalf("vessel_grep failed: line=%s, err=%v", line, respGrep.Error)
+	}
+
+	resultMap := respGrep.Result.(map[string]any)
+	contentList := resultMap["content"].([]any)
+	firstContent := contentList[0].(map[string]any)
+	textJSON := firstContent["text"].(string)
+
+	var grepResult sandbox.GrepResult
+	_ = json.Unmarshal([]byte(textJSON), &grepResult)
+	if grepResult.TotalMatches != 1 || len(grepResult.Matches) != 1 {
+		t.Errorf("expected 1 match for beta, got %d", grepResult.TotalMatches)
+	}
+
+	// 2. Test vessel_apply_patch
+	patch := `--- a/code.txt
++++ b/code.txt
+@@ -1,3 +1,3 @@
+ alpha
+-beta
++beta-updated
+ gamma
+`
+	patchJSON, _ := json.Marshal(patch)
+	outBuf.Reset()
+	inBuf.Reset()
+	reqPatch := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vessel_apply_patch","arguments":{"patch":` + string(patchJSON) + `,"dry_run":false}}}` + "\n"
+	inBuf.WriteString(reqPatch)
+	_ = server.Serve(ctx)
+
+	var respPatch JSONRPCResponse
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respPatch) != nil || respPatch.Error != nil {
+		t.Fatalf("vessel_apply_patch failed: line=%s, err=%v", line, respPatch.Error)
+	}
+
+	updatedData, _ := os.ReadFile(samplePath)
+	if !strings.Contains(string(updatedData), "beta-updated") {
+		t.Errorf("expected file to be patched, got: %s", string(updatedData))
 	}
 }

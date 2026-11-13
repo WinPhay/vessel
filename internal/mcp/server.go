@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -437,6 +438,54 @@ func (s *Server) getToolsList() []Tool {
 				"required": []string{"process_id"},
 			},
 		},
+		{
+			Name:        "vessel_grep",
+			Description: "Fast regex and substring search across workspace files with path jail protection and token estimates.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{
+						"type":        "string",
+						"description": "Regular expression or literal text to search for.",
+					},
+					"path": map[string]any{
+						"type":        "string",
+						"description": "Directory or file path relative to workspace (default: '.').",
+					},
+					"file_pattern": map[string]any{
+						"type":        "string",
+						"description": "Optional glob filter for filenames (e.g., '*.go', '*.ts').",
+					},
+					"max_matches": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of matches to return (default: 100).",
+					},
+					"case_sensitive": map[string]any{
+						"type":        "boolean",
+						"description": "Whether the search is case-sensitive (default: false).",
+					},
+				},
+				"required": []string{"pattern"},
+			},
+		},
+		{
+			Name:        "vessel_apply_patch",
+			Description: "Applies a unified diff patch atomically to a target file in the workspace sandbox.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"patch": map[string]any{
+						"type":        "string",
+						"description": "The unified diff content (e.g. starting with '--- a/...' and '+++ b/...').",
+					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"description": "If true, validates patch applicability without modifying disk (default: false).",
+					},
+				},
+				"required": []string{"patch"},
+			},
+		},
 	}
 }
 
@@ -764,6 +813,55 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			"process_id": args.ProcessID,
 			"status":     "terminated",
 		}
+		resPayload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_grep":
+		var args struct {
+			Pattern       string `json:"pattern"`
+			Path          string `json:"path"`
+			FilePattern   string `json:"file_pattern"`
+			MaxMatches    int    `json:"max_matches"`
+			CaseSensitive bool   `json:"case_sensitive"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_grep: %v", err))
+		}
+		if strings.TrimSpace(args.Pattern) == "" {
+			return s.toolErrorResponse(req.ID, "pattern parameter is required")
+		}
+
+		res, err := sandbox.GrepWorkspace(s.workspace, sandbox.GrepOptions{
+			Pattern:       args.Pattern,
+			Path:          args.Path,
+			FilePattern:   args.FilePattern,
+			MaxMatches:    args.MaxMatches,
+			CaseSensitive: args.CaseSensitive,
+		})
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("grep failed: %v", err))
+		}
+
+		resPayload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_apply_patch":
+		var args struct {
+			Patch  string `json:"patch"`
+			DryRun bool   `json:"dry_run"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_apply_patch: %v", err))
+		}
+		if strings.TrimSpace(args.Patch) == "" {
+			return s.toolErrorResponse(req.ID, "patch parameter is required")
+		}
+
+		res, err := sandbox.ApplyPatch(s.workspace, args.Patch, args.DryRun)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("patch failed: %v", err))
+		}
+
 		resPayload, _ := json.MarshalIndent(res, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(resPayload))
 

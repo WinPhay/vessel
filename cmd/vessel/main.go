@@ -13,6 +13,8 @@ import (
 
 	"github.com/WinPhay/vessel/internal/mcp"
 	"github.com/WinPhay/vessel/internal/sandbox"
+	"github.com/WinPhay/vessel/internal/tokenfilter"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 )
 
@@ -38,6 +40,8 @@ func main() {
 		runRollback(os.Args[2:])
 	case "status":
 		runStatus(os.Args[2:])
+	case "process":
+		runProcess(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -339,6 +343,120 @@ func runStatus(args []string) {
 	fmt.Printf("  OCI Runtime:  daemon default (override via --runtime runsc for gVisor)\n")
 }
 
+func runProcess(args []string) {
+	procFlags := flag.NewFlagSet("process", flag.ExitOnError)
+	workspace := procFlags.String("workspace", ".", "Host directory of workspace")
+	signalFlag := procFlags.String("signal", "SIGTERM", "Signal to send (SIGTERM or SIGKILL)")
+	maxBytes := procFlags.Int("max-bytes", 65536, "Max bytes to display for logs")
+	_ = parseInterspersed(procFlags, args)
+
+	remaining := procFlags.Args()
+	if len(remaining) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: process subcommand required (list, kill, logs)")
+		fmt.Fprintln(os.Stderr, "Usage: vessel process <list | kill <id> | logs <id>> [--workspace <dir>]")
+		os.Exit(1)
+	}
+
+	action := remaining[0]
+	switch action {
+	case "list":
+		absPath, _ := filepath.Abs(*workspace)
+		fmt.Printf("Active Background Processes (workspace: %s):\n", absPath)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			fmt.Printf("  Docker disconnected: %v\n", err)
+			return
+		}
+		defer cli.Close()
+
+		containers, err := cli.ContainerList(ctx, container.ListOptions{All: false})
+		if err != nil {
+			fmt.Printf("  Error querying containers: %v\n", err)
+			return
+		}
+
+		found := 0
+		fmt.Println("  CONTAINER ID        CONTAINER NAME      STATUS     COMMAND")
+		for _, c := range containers {
+			for _, name := range c.Names {
+				if strings.Contains(name, "vessel-sandbox") {
+					found++
+					cID := c.ID
+					if len(cID) > 12 {
+						cID = cID[:12]
+					}
+					fmt.Printf("  %-18s  %-18s  %-9s  %s\n", cID, strings.TrimPrefix(name, "/"), c.State, c.Command)
+				}
+			}
+		}
+		if found == 0 {
+			fmt.Println("  No active container processes found.")
+		}
+
+	case "kill":
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: process kill requires a process or container ID")
+			fmt.Fprintln(os.Stderr, "Usage: vessel process kill <id> [--signal <SIGTERM|SIGKILL>]")
+			os.Exit(1)
+		}
+		targetID := remaining[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Docker client error: %v\n", err)
+			os.Exit(1)
+		}
+		defer cli.Close()
+
+		err = cli.ContainerKill(ctx, targetID, *signalFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Failed to send %s to process %s: %v\n", *signalFlag, targetID, err)
+			os.Exit(1)
+		}
+		fmt.Printf("[vessel] Process %s terminated with signal %s.\n", targetID, *signalFlag)
+
+	case "logs":
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: process logs requires a process or container ID")
+			fmt.Fprintln(os.Stderr, "Usage: vessel process logs <id> [--max-bytes <N>]")
+			os.Exit(1)
+		}
+		targetID := remaining[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Docker client error: %v\n", err)
+			os.Exit(1)
+		}
+		defer cli.Close()
+
+		logReader, err := cli.ContainerLogs(ctx, targetID, container.LogsOptions{
+			ShowStdout: true,
+			ShowStderr: true,
+			Tail:       "100",
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Failed to fetch logs for %s: %v\n", targetID, err)
+			os.Exit(1)
+		}
+		defer logReader.Close()
+
+		buf := make([]byte, *maxBytes)
+		n, _ := logReader.Read(buf)
+		cleaned := tokenfilter.CleanOutput(string(buf[:n]))
+		fmt.Println(cleaned)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown process action: %s\n", action)
+		fmt.Fprintln(os.Stderr, "Usage: vessel process <list | kill <id> | logs <id>>")
+		os.Exit(1)
+	}
+}
+
 func printUsage() {
 	fmt.Printf("Vessel v%s — Local AI Agent Sandbox Engine\n\n", strings.TrimPrefix(Version, "v"))
 	fmt.Println("Usage:")
@@ -349,6 +467,8 @@ func printUsage() {
 	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>")
 	fmt.Println("  mcp         Start stdio Model Context Protocol server")
 	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --mock")
+	fmt.Println("  process     Manage background container processes")
+	fmt.Println("              Usage: vessel process [list | kill <id> | logs <id>] [--workspace <dir>]")
 	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
 	fmt.Println("              Usage: vessel checkpoint [create <tag> | list | <tag>] [--workspace <dir>]")
 	fmt.Println("  rollback    Restore workspace to a named checkpoint")

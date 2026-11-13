@@ -53,7 +53,7 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "Vessel v") {
 		t.Errorf("expected usage to mention Vessel v, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "checkpoint") || !strings.Contains(stdout, "rollback") || !strings.Contains(stdout, "status") {
+	if !strings.Contains(stdout, "checkpoint") || !strings.Contains(stdout, "rollback") || !strings.Contains(stdout, "status") || !strings.Contains(stdout, "process") {
 		t.Errorf("usage missing new subcommands: %s", stdout)
 	}
 	if !strings.Contains(stdout, "runsc") || !strings.Contains(stdout, "OCI Runtimes") {
@@ -162,5 +162,21 @@ func TestCLI_InterspersedFlags(t *testing.T) {
 	data, _ := os.ReadFile(testFile)
 	if string(data) != "v1 content" {
 		t.Errorf("expected 'v1 content', got %q", string(data))
+	}
+}
+
+func TestCLI_ProcessSubcommand(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-cli-proc-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	stdout, _ := captureOutput(func() {
+		runProcess([]string{"list", "--workspace", tempDir})
+	})
+
+	if !strings.Contains(stdout, "Background Processes") {
+		t.Errorf("expected process list header, got: %s", stdout)
 	}
 }

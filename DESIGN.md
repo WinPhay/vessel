@@ -39,7 +39,7 @@ Host Environment (Developer Workstation)
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 14 core tools over the Model Context Protocol:
+Vessel exposes 16 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
@@ -57,6 +57,8 @@ Vessel exposes 14 core tools over the Model Context Protocol:
 | `vessel_process_output` | `process_id: string`, `max_bytes?: int` | Reads unread stdout/stderr from process ring buffer with token estimation. |
 | `vessel_process_write` | `process_id: string`, `input: string` | Writes standard input (keystrokes, commands, confirmation) into active process stdin. |
 | `vessel_kill_process` | `process_id: string`, `signal?: string` | Sends termination signal (SIGTERM/SIGKILL) to stop a background process. |
+| `vessel_grep` | `pattern: string`, `path?: string`, `file_pattern?: string`, `max_matches?: int`, `case_sensitive?: bool` | Fast regex and substring search across workspace files with token estimates. |
+| `vessel_apply_patch` | `patch: string`, `dry_run?: bool` | Applies a unified diff patch atomically to a target file in the workspace sandbox. |
 
 ---
 
