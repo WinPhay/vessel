@@ -186,3 +186,70 @@ func TestApplyPatch_Failures(t *testing.T) {
 		t.Errorf("expected ErrPathEscapesJail, got: %v", err)
 	}
 }
+
+func TestSearchPatch_PersonaQA(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-searchpatch-persona-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// 1. Tier 1: Monkey - Binary file handling (null bytes in file)
+	binFile := filepath.Join(tempDir, "image.bin")
+	_ = os.WriteFile(binFile, []byte("GIF89a\x00\x01\x00find_me_in_binary"), 0644)
+	res, err := GrepWorkspace(tempDir, GrepOptions{Pattern: "find_me"})
+	if err != nil {
+		t.Fatalf("Grep on binary dir failed: %v", err)
+	}
+	if len(res.Matches) != 0 {
+		t.Errorf("binary file matches should be skipped, got: %+v", res.Matches)
+	}
+
+	// 2. Tier 2: Blind Box - Invalid regex pattern
+	_, err = GrepWorkspace(tempDir, GrepOptions{Pattern: "[unclosed-bracket"})
+	if err == nil {
+		t.Errorf("expected regex compilation error for unclosed bracket, got nil")
+	}
+
+	// 3. Tier 3: Semi-Tech - Max match truncation
+	textPath := filepath.Join(tempDir, "repeats.txt")
+	_ = os.WriteFile(textPath, []byte("match 1\nmatch 2\nmatch 3\nmatch 4\n"), 0644)
+	truncRes, err := GrepWorkspace(tempDir, GrepOptions{Pattern: "match", MaxMatches: 2})
+	if err != nil {
+		t.Fatalf("Grep with limit failed: %v", err)
+	}
+	if !truncRes.Truncated || len(truncRes.Matches) != 2 {
+		t.Errorf("expected Truncated=true and exactly 2 matches, got len=%d, trunc=%v", len(truncRes.Matches), truncRes.Truncated)
+	}
+
+	// 4. Tier 4: Adversarial - Multi-hunk patch with line offset shifting
+	multiDoc := filepath.Join(tempDir, "multi.txt")
+	_ = os.WriteFile(multiDoc, []byte("lineA\nlineB\nlineC\nlineD\nlineE\nlineF\n"), 0644)
+
+	multiPatch := `--- a/multi.txt
++++ b/multi.txt
+@@ -1,3 +1,4 @@
+ lineA
++lineA.1
+ lineB
+ lineC
+@@ -4,3 +5,3 @@
+ lineD
+-lineE
++lineE_modified
+ lineF
+`
+	patchRes, err := ApplyPatch(tempDir, multiPatch, false)
+	if err != nil {
+		t.Fatalf("multi-hunk patch failed: %v", err)
+	}
+	if patchRes.HunksApplied != 2 || patchRes.LinesAdded != 2 || patchRes.LinesDeleted != 1 {
+		t.Errorf("unexpected multi-hunk patch result: %+v", patchRes)
+	}
+
+	finalBytes, _ := os.ReadFile(multiDoc)
+	expectedFinal := "lineA\nlineA.1\nlineB\nlineC\nlineD\nlineE_modified\nlineF\n"
+	if string(finalBytes) != expectedFinal {
+		t.Errorf("multi-hunk output mismatch:\nexpected:\n%s\ngot:\n%s", expectedFinal, string(finalBytes))
+	}
+}
