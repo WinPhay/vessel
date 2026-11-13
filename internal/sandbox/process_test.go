@@ -210,3 +210,70 @@ func TestMockSandbox_ProcessManagement(t *testing.T) {
 		t.Errorf("expected ErrSandboxClosed, got: %v", err)
 	}
 }
+
+func TestProcess_PersonaQA(t *testing.T) {
+	ctx := context.Background()
+	sb := NewMockSandbox()
+	defer sb.Close()
+
+	// Tier 1: Chaos / Monkey - Extreme input string & rapid writes
+	info, err := sb.StartProcess(ctx, "cat", true, -10, 0)
+	if err != nil {
+		t.Fatalf("Tier 1 StartProcess failed: %v", err)
+	}
+
+	extremeString := strings.Repeat("🔥🐵\x00\r\n\t", 500)
+	written, err := sb.WriteProcessInput(ctx, info.ID, extremeString)
+	if err != nil || written != len(extremeString) {
+		t.Errorf("Tier 1 WriteProcessInput failed: written=%d, err=%v", written, err)
+	}
+
+	// Tier 2: Blind Box - Non-existent ID & double kill
+	_, _, _, err = sb.ReadProcessOutput(ctx, "fake-uuid-9999", 100)
+	if err != ErrProcessNotFound {
+		t.Errorf("Tier 2 Read non-existent process: expected ErrProcessNotFound, got: %v", err)
+	}
+
+	_, err = sb.WriteProcessInput(ctx, "fake-uuid-9999", "data")
+	if err != ErrProcessNotFound {
+		t.Errorf("Tier 2 Write non-existent process: expected ErrProcessNotFound, got: %v", err)
+	}
+
+	err = sb.KillProcess(ctx, info.ID, "SIGTERM")
+	if err != nil {
+		t.Errorf("Tier 2 First Kill failed: %v", err)
+	}
+	// Double kill should be idempotent and return nil without error or panic
+	err = sb.KillProcess(ctx, info.ID, "SIGKILL")
+	if err != nil {
+		t.Errorf("Tier 2 Second Kill should be idempotent, got: %v", err)
+	}
+
+	// Tier 3: Semi-Tech - Ring buffer massive overflow without memory leak
+	rb := NewRingBuffer(50)
+	massiveData := make([]byte, 10000)
+	for i := range massiveData {
+		massiveData[i] = byte('A' + (i % 26))
+	}
+	n, err := rb.Write(massiveData)
+	if err != nil || n != 10000 {
+		t.Errorf("Tier 3 RingBuffer massive write failed: n=%d, err=%v", n, err)
+	}
+	drained := rb.ReadUnread(0)
+	if len(drained) != 50 {
+		t.Errorf("Tier 3 expected drained length exactly 50, got %d", len(drained))
+	}
+
+	// Tier 4: Adversarial - Unhandled signal string & graceful shutdown
+	infoAdv, _ := sb.StartProcess(ctx, "daemon", false, 24, 80)
+	err = sb.KillProcess(ctx, infoAdv.ID, "; rm -rf /; malicious")
+	if err != nil {
+		t.Errorf("Tier 4 malicious signal name should not cause panic, got: %v", err)
+	}
+
+	// Verify status after adversarial kill
+	_, exitCode, running, err := sb.ReadProcessOutput(ctx, infoAdv.ID, 0)
+	if err != nil || running || exitCode == nil {
+		t.Errorf("Tier 4 process should be terminated with exit code, got running=%v, exitCode=%v", running, exitCode)
+	}
+}
