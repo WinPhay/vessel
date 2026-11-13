@@ -132,3 +132,38 @@ func (m *MicroVMSandbox) Close() error {
 	m.closed = true
 	return nil
 }
+
+func (m *MicroVMSandbox) StartProcess(ctx context.Context, cmd string, pty bool, rows, cols int) (*ProcessInfo, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	return nil, fmt.Errorf("%w: microvm process manager requires active vm instance", ErrDriverNotReady)
+}
+
+func (m *MicroVMSandbox) ReadProcessOutput(ctx context.Context, id string, maxBytes int) (string, *int, bool, error) {
+	if m.closed {
+		return "", nil, false, ErrSandboxClosed
+	}
+	return "", nil, false, fmt.Errorf("%w: microvm process manager requires active vm instance", ErrDriverNotReady)
+}
+
+func (m *MicroVMSandbox) WriteProcessInput(ctx context.Context, id string, input string) (int, error) {
+	if m.closed {
+		return 0, ErrSandboxClosed
+	}
+	return 0, fmt.Errorf("%w: microvm process manager requires active vm instance", ErrDriverNotReady)
+}
+
+func (m *MicroVMSandbox) KillProcess(ctx context.Context, id string, signal string) error {
+	if m.closed {
+		return ErrSandboxClosed
+	}
+	return fmt.Errorf("%w: microvm process manager requires active vm instance", ErrDriverNotReady)
+}
+
+func (m *MicroVMSandbox) ListProcesses(ctx context.Context) ([]*ProcessInfo, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	return nil, fmt.Errorf("%w: microvm process manager requires active vm instance", ErrDriverNotReady)
+}

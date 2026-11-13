@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/WinPhay/vessel/internal/sandbox"
+	"github.com/WinPhay/vessel/internal/tokenfilter"
 )
 
 const (
@@ -356,6 +357,86 @@ func (s *Server) getToolsList() []Tool {
 				"required": []string{"url"},
 			},
 		},
+		{
+			Name:        "vessel_start_process",
+			Description: "Spawns a background or interactive process inside the isolated Vessel sandbox container.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{
+						"type":        "string",
+						"description": "Command string to spawn in the background.",
+					},
+					"pty": map[string]any{
+						"type":        "boolean",
+						"description": "Whether to allocate an interactive pseudo-terminal (default: true).",
+					},
+					"rows": map[string]any{
+						"type":        "integer",
+						"description": "Terminal rows for PTY window size (default: 24).",
+					},
+					"cols": map[string]any{
+						"type":        "integer",
+						"description": "Terminal columns for PTY window size (default: 80).",
+					},
+				},
+				"required": []string{"command"},
+			},
+		},
+		{
+			Name:        "vessel_process_output",
+			Description: "Reads unread stdout/stderr from a running or completed background process.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"process_id": map[string]any{
+						"type":        "string",
+						"description": "Unique identifier of the spawned process.",
+					},
+					"max_bytes": map[string]any{
+						"type":        "integer",
+						"description": "Maximum bytes to read from buffer (default: 65536).",
+					},
+				},
+				"required": []string{"process_id"},
+			},
+		},
+		{
+			Name:        "vessel_process_write",
+			Description: "Sends standard input (text/keystrokes) to a running process inside the sandbox container.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"process_id": map[string]any{
+						"type":        "string",
+						"description": "Unique identifier of the target process.",
+					},
+					"input": map[string]any{
+						"type":        "string",
+						"description": "Raw string or keystrokes to deliver to standard input.",
+					},
+				},
+				"required": []string{"process_id", "input"},
+			},
+		},
+		{
+			Name:        "vessel_kill_process",
+			Description: "Terminates a background process inside the sandbox container.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"process_id": map[string]any{
+						"type":        "string",
+						"description": "Unique identifier of the process to terminate.",
+					},
+					"signal": map[string]any{
+						"type":        "string",
+						"description": "Termination signal (SIGTERM or SIGKILL; default: SIGTERM).",
+					},
+				},
+				"required": []string{"process_id"},
+			},
+		},
 	}
 }
 
@@ -576,6 +657,115 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 		}
 		payload, _ := json.MarshalIndent(res, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_start_process":
+		var args struct {
+			Command string `json:"command"`
+			PTY     *bool  `json:"pty"`
+			Rows    int    `json:"rows"`
+			Cols    int    `json:"cols"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_start_process: %v", err))
+		}
+		if args.Command == "" {
+			return s.toolErrorResponse(req.ID, "command parameter is required")
+		}
+		isPTY := true
+		if args.PTY != nil {
+			isPTY = *args.PTY
+		}
+		rows := args.Rows
+		if rows <= 0 {
+			rows = 24
+		}
+		cols := args.Cols
+		if cols <= 0 {
+			cols = 80
+		}
+
+		info, err := s.sb.StartProcess(ctx, args.Command, isPTY, rows, cols)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to start process: %v", err))
+		}
+
+		resPayload, _ := json.MarshalIndent(info, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_process_output":
+		var args struct {
+			ProcessID string `json:"process_id"`
+			MaxBytes  int    `json:"max_bytes"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_process_output: %v", err))
+		}
+		if args.ProcessID == "" {
+			return s.toolErrorResponse(req.ID, "process_id parameter is required")
+		}
+
+		output, exitCode, running, err := s.sb.ReadProcessOutput(ctx, args.ProcessID, args.MaxBytes)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to read process output: %v", err))
+		}
+
+		res := map[string]any{
+			"process_id":     args.ProcessID,
+			"output":         output,
+			"running":        running,
+			"exit_code":      exitCode,
+			"token_estimate": tokenfilter.EstimateTokens(output),
+		}
+		resPayload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_process_write":
+		var args struct {
+			ProcessID string `json:"process_id"`
+			Input     string `json:"input"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_process_write: %v", err))
+		}
+		if args.ProcessID == "" {
+			return s.toolErrorResponse(req.ID, "process_id parameter is required")
+		}
+
+		n, err := s.sb.WriteProcessInput(ctx, args.ProcessID, args.Input)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to write process input: %v", err))
+		}
+
+		res := map[string]any{
+			"process_id":    args.ProcessID,
+			"bytes_written": n,
+			"status":        "delivered",
+		}
+		resPayload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_kill_process":
+		var args struct {
+			ProcessID string `json:"process_id"`
+			Signal    string `json:"signal"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_kill_process: %v", err))
+		}
+		if args.ProcessID == "" {
+			return s.toolErrorResponse(req.ID, "process_id parameter is required")
+		}
+
+		if err := s.sb.KillProcess(ctx, args.ProcessID, args.Signal); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to kill process: %v", err))
+		}
+
+		res := map[string]any{
+			"process_id": args.ProcessID,
+			"status":     "terminated",
+		}
+		resPayload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
 
 	default:
 		return s.toolErrorResponse(req.ID, fmt.Sprintf("unknown tool: %s", callParams.Name))

@@ -78,8 +78,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 10 {
-		t.Errorf("expected 10 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 14 {
+		t.Errorf("expected 14 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -192,5 +192,85 @@ func TestMCPServerUnknownMethod(t *testing.T) {
 
 	if resp.Error == nil || resp.Error.Code != -32601 {
 		t.Errorf("expected method not found error code -32601, got: %v", resp.Error)
+	}
+}
+
+func TestMCPServerProcessTools(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	var inBuf, outBuf bytes.Buffer
+
+	server := NewServer(mockSB, "/test/workspace", &inBuf, &outBuf)
+
+	// 1. Start process
+	reqStart := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_start_process","arguments":{"command":"python3 -i","pty":true,"rows":24,"cols":80}}}` + "\n"
+	inBuf.WriteString(reqStart)
+
+	ctx := context.Background()
+	_ = server.Serve(ctx)
+
+	var respStart JSONRPCResponse
+	line, err := outBuf.ReadString('\n')
+	if err != nil {
+		t.Fatalf("failed reading start response: %v", err)
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &respStart); err != nil {
+		t.Fatalf("failed unmarshaling start response: %v", err)
+	}
+	if respStart.Error != nil {
+		t.Fatalf("vessel_start_process returned error: %v", respStart.Error)
+	}
+
+	resultMap := respStart.Result.(map[string]any)
+	contentList := resultMap["content"].([]any)
+	firstContent := contentList[0].(map[string]any)
+	textJSON := firstContent["text"].(string)
+
+	var info sandbox.ProcessInfo
+	if err := json.Unmarshal([]byte(textJSON), &info); err != nil {
+		t.Fatalf("failed parsing process info JSON: %v", err)
+	}
+	if info.ID == "" || !info.Running {
+		t.Fatalf("unexpected process info: %+v", info)
+	}
+
+	// 2. Write process input
+	outBuf.Reset()
+	inBuf.Reset()
+	reqWrite := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vessel_process_write","arguments":{"process_id":"` + info.ID + `","input":"print(123)\n"}}}` + "\n"
+	inBuf.WriteString(reqWrite)
+	_ = server.Serve(ctx)
+
+	var respWrite JSONRPCResponse
+	line, _ = outBuf.ReadString('\n')
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &respWrite); err != nil || respWrite.Error != nil {
+		t.Fatalf("vessel_process_write failed: %v", respWrite.Error)
+	}
+
+	// 3. Read process output
+	outBuf.Reset()
+	inBuf.Reset()
+	reqOutput := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vessel_process_output","arguments":{"process_id":"` + info.ID + `"深化"}}}`
+	// fix JSON string
+	reqOutput = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vessel_process_output","arguments":{"process_id":"` + info.ID + `"}}}` + "\n"
+	inBuf.WriteString(reqOutput)
+	_ = server.Serve(ctx)
+
+	var respOutput JSONRPCResponse
+	line, _ = outBuf.ReadString('\n')
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &respOutput); err != nil || respOutput.Error != nil {
+		t.Fatalf("vessel_process_output failed: %v", respOutput.Error)
+	}
+
+	// 4. Kill process
+	outBuf.Reset()
+	inBuf.Reset()
+	reqKill := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vessel_kill_process","arguments":{"process_id":"` + info.ID + `","signal":"SIGTERM"}}}` + "\n"
+	inBuf.WriteString(reqKill)
+	_ = server.Serve(ctx)
+
+	var respKill JSONRPCResponse
+	line, _ = outBuf.ReadString('\n')
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &respKill); err != nil || respKill.Error != nil {
+		t.Fatalf("vessel_kill_process failed: %v", respKill.Error)
 	}
 }

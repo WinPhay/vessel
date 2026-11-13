@@ -39,7 +39,7 @@ Host Environment (Developer Workstation)
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 10 core tools over the Model Context Protocol:
+Vessel exposes 14 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
@@ -53,6 +53,10 @@ Vessel exposes 10 core tools over the Model Context Protocol:
 | `vessel_browse_url` | `url: string`, `wait_seconds?: int`, `include_links?: bool` | Visits URL in headless browser sandbox, rendering dynamic DOM and returning sanitized Markdown text. |
 | `vessel_screenshot` | `url: string`, `output_path?: string`, `full_page?: bool`, `width?: int`, `height?: int` | Captures PNG screenshot of web page into workspace sandbox. |
 | `vessel_extract_page` | `url: string` | Extracts structured interactive affordances (headings, links, inputs, buttons) as JSON. |
+| `vessel_start_process` | `command: string`, `pty?: bool`, `rows?: int`, `cols?: int` | Spawns background or interactive process inside container jail; returns unique `process_id`. |
+| `vessel_process_output` | `process_id: string`, `max_bytes?: int` | Reads unread stdout/stderr from process ring buffer with token estimation. |
+| `vessel_process_write` | `process_id: string`, `input: string` | Writes standard input (keystrokes, commands, confirmation) into active process stdin. |
+| `vessel_kill_process` | `process_id: string`, `signal?: string` | Sends termination signal (SIGTERM/SIGKILL) to stop a background process. |
 
 ---
 

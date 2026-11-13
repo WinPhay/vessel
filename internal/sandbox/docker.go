@@ -39,6 +39,7 @@ type DockerSandbox struct {
 	mu          sync.RWMutex
 	checkpoints map[string]string // tag -> imageID
 	snapshotMgr *SnapshotManager
+	procMgr     *ProcessManager
 	closed      bool
 }
 
@@ -174,6 +175,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		cfg:         cfg,
 		checkpoints: make(map[string]string),
 		snapshotMgr: snapMgr,
+		procMgr:     NewProcessManager(),
 	}, nil
 }
 
@@ -390,8 +392,136 @@ func (d *DockerSandbox) Close() error {
 	}
 	d.closed = true
 
+	if d.procMgr != nil {
+		_ = d.procMgr.Close()
+	}
+
 	stopTimeout := 2
 	_ = d.cli.ContainerStop(context.Background(), d.containerID, container.StopOptions{Timeout: &stopTimeout})
 	err := d.cli.ContainerRemove(context.Background(), d.containerID, container.RemoveOptions{Force: true})
 	return err
+}
+
+// StartProcess spawns a background or interactive process inside the container.
+func (d *DockerSandbox) StartProcess(ctx context.Context, cmd string, isPTY bool, rows, cols int) (*ProcessInfo, error) {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return nil, ErrSandboxClosed
+	}
+	containerID := d.containerID
+	d.mu.RUnlock()
+
+	execCfg := container.ExecOptions{
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          isPTY,
+		Cmd:          []string{"sh", "-c", cmd},
+	}
+
+	execCreateResp, err := d.cli.ContainerExecCreate(ctx, containerID, execCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create exec process: %w", err)
+	}
+
+	attachResp, err := d.cli.ContainerExecAttach(ctx, execCreateResp.ID, container.ExecAttachOptions{
+		Tty: isPTY,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to attach to exec process: %w", err)
+	}
+
+	if isPTY && rows > 0 && cols > 0 {
+		_ = d.cli.ContainerExecResize(ctx, execCreateResp.ID, container.ResizeOptions{
+			Height: uint(rows),
+			Width:  uint(cols),
+		})
+	}
+
+	procCtx, procCancel := context.WithCancel(context.Background())
+
+	proc := d.procMgr.RegisterProcess(cmd, isPTY, attachResp.Conn, procCancel, func() error {
+		attachResp.Close()
+		return nil
+	})
+
+	// Background worker copying stdout/stderr into proc.buf and waiting for exit
+	go func() {
+		defer attachResp.Close()
+		if isPTY {
+			_, _ = io.Copy(proc.buf, attachResp.Reader)
+		} else {
+			_, _ = stdcopy.StdCopy(proc.buf, proc.buf, attachResp.Reader)
+		}
+
+		proc.mu.Lock()
+		proc.Running = false
+		proc.mu.Unlock()
+
+		// Inspect exit code
+		inspectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		inspect, err := d.cli.ContainerExecInspect(inspectCtx, execCreateResp.ID)
+		if err == nil {
+			proc.mu.Lock()
+			code := inspect.ExitCode
+			proc.ExitCode = &code
+			proc.mu.Unlock()
+		}
+		_ = procCtx
+	}()
+
+	return &ProcessInfo{
+		ID:        proc.ID,
+		Command:   proc.Command,
+		Running:   proc.Running,
+		ExitCode:  proc.ExitCode,
+		StartedAt: proc.StartedAt,
+		IsPTY:     proc.IsPTY,
+	}, nil
+}
+
+// ReadProcessOutput reads unread stdout/stderr from a managed process.
+func (d *DockerSandbox) ReadProcessOutput(ctx context.Context, id string, maxBytes int) (string, *int, bool, error) {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return "", nil, false, ErrSandboxClosed
+	}
+	d.mu.RUnlock()
+	return d.procMgr.ReadOutput(id, maxBytes)
+}
+
+// WriteProcessInput writes text into a managed process's stdin.
+func (d *DockerSandbox) WriteProcessInput(ctx context.Context, id string, input string) (int, error) {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return 0, ErrSandboxClosed
+	}
+	d.mu.RUnlock()
+	return d.procMgr.WriteInput(id, input)
+}
+
+// KillProcess sends a termination signal to a managed process.
+func (d *DockerSandbox) KillProcess(ctx context.Context, id string, signal string) error {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return ErrSandboxClosed
+	}
+	d.mu.RUnlock()
+	return d.procMgr.Kill(id, signal)
+}
+
+// ListProcesses lists all managed background and interactive processes.
+func (d *DockerSandbox) ListProcesses(ctx context.Context) ([]*ProcessInfo, error) {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return nil, ErrSandboxClosed
+	}
+	d.mu.RUnlock()
+	return d.procMgr.List(), nil
 }
