@@ -79,8 +79,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 16 {
-		t.Errorf("expected 16 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 19 {
+		t.Errorf("expected 19 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -338,5 +338,78 @@ func TestMCPServerSearchAndPatchTools(t *testing.T) {
 	updatedData, _ := os.ReadFile(samplePath)
 	if !strings.Contains(string(updatedData), "beta-updated") {
 		t.Errorf("expected file to be patched, got: %s", string(updatedData))
+	}
+}
+
+func TestMCPServerServiceTools(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	var inBuf, outBuf bytes.Buffer
+
+	server := NewServer(mockSB, ".", &inBuf, &outBuf)
+	ctx := context.Background()
+
+	// 1. Spawn service
+	reqSpawn := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_spawn_service","arguments":{"name":"test-db","image":"postgres:15-alpine","env":{"POSTGRES_PASSWORD":"secretpassword"}}}}` + "\n"
+	inBuf.WriteString(reqSpawn)
+	_ = server.Serve(ctx)
+
+	var respSpawn JSONRPCResponse
+	line, err := outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respSpawn) != nil || respSpawn.Error != nil {
+		t.Fatalf("vessel_spawn_service failed: line=%s, err=%v", line, respSpawn.Error)
+	}
+
+	resultMap := respSpawn.Result.(map[string]any)
+	contentList := resultMap["content"].([]any)
+	firstContent := contentList[0].(map[string]any)
+	textJSON := firstContent["text"].(string)
+
+	var svcInfo sandbox.ServiceInfo
+	_ = json.Unmarshal([]byte(textJSON), &svcInfo)
+	if svcInfo.Name != "test-db" || svcInfo.Hostname != "test-db" {
+		t.Errorf("unexpected service info: %+v", svcInfo)
+	}
+
+	// 2. List services
+	outBuf.Reset()
+	inBuf.Reset()
+	reqList := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vessel_list_services","arguments":{}}}` + "\n"
+	inBuf.WriteString(reqList)
+	_ = server.Serve(ctx)
+
+	var respList JSONRPCResponse
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respList) != nil || respList.Error != nil {
+		t.Fatalf("vessel_list_services failed: line=%s, err=%v", line, respList.Error)
+	}
+
+	listMap := respList.Result.(map[string]any)
+	listContent := listMap["content"].([]any)
+	listText := listContent[0].(map[string]any)["text"].(string)
+
+	var services []*sandbox.ServiceInfo
+	_ = json.Unmarshal([]byte(listText), &services)
+	if len(services) != 1 || services[0].Name != "test-db" {
+		t.Errorf("expected 1 service 'test-db', got: %+v", services)
+	}
+
+	// 3. Stop service
+	outBuf.Reset()
+	inBuf.Reset()
+	reqStop := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vessel_stop_service","arguments":{"name":"test-db"}}}` + "\n"
+	inBuf.WriteString(reqStop)
+	_ = server.Serve(ctx)
+
+	var respStop JSONRPCResponse
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respStop) != nil || respStop.Error != nil {
+		t.Fatalf("vessel_stop_service failed: line=%s, err=%v", line, respStop.Error)
+	}
+
+	stopMap := respStop.Result.(map[string]any)
+	stopContent := stopMap["content"].([]any)
+	stopText := stopContent[0].(map[string]any)["text"].(string)
+	if !strings.Contains(stopText, "stopped and removed successfully") {
+		t.Errorf("unexpected stop response: %s", stopText)
 	}
 }

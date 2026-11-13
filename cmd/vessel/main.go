@@ -42,6 +42,8 @@ func main() {
 		runStatus(os.Args[2:])
 	case "process":
 		runProcess(os.Args[2:])
+	case "service":
+		runService(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -99,13 +101,15 @@ func runExec(args []string) {
 	runtime := execFlags.String("runtime", "", "OCI container runtime (e.g. 'runc', 'runsc' for gVisor)")
 	var secrets multiStringFlag
 	execFlags.Var(&secrets, "secret", "Custom secret to inject and redact in form KEY=VALUE (repeatable)")
+	var services multiStringFlag
+	execFlags.Var(&services, "service", "Sidecar service to spawn on session network in form NAME=IMAGE (repeatable)")
 	maskSecrets := execFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: vessel exec requires a command to run inside the sandbox")
-		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] [--runtime <runtime>] [--secret <KEY=VAL>] [--mask-secrets] \"<command>\"")
+		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] [--runtime <runtime>] [--secret <KEY=VAL>] [--service <NAME=IMG>] [--mask-secrets] \"<command>\"")
 		os.Exit(1)
 	}
 
@@ -159,6 +163,19 @@ func runExec(args []string) {
 	}
 	defer sb.Close()
 
+	for _, s := range services {
+		parts := strings.SplitN(s, "=", 2)
+		if len(parts) == 2 {
+			svcName := strings.TrimSpace(parts[0])
+			svcImage := strings.TrimSpace(parts[1])
+			fmt.Printf("[vessel] Spawning sidecar service %s (%s)...\n", svcName, svcImage)
+			_, err := sb.SpawnService(ctx, svcName, svcImage, nil, "")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[vessel] Warning: failed to spawn sidecar %s: %v\n", svcName, err)
+			}
+		}
+	}
+
 	fmt.Printf("[vessel] Executing: %s\n", cmdToRun)
 	res, err := sb.Exec(ctx, cmdToRun)
 	if err != nil {
@@ -190,6 +207,8 @@ func runMCP(args []string) {
 	runtime := mcpFlags.String("runtime", "", "OCI container runtime (e.g. 'runc', 'runsc' for gVisor)")
 	var secrets multiStringFlag
 	mcpFlags.Var(&secrets, "secret", "Custom secret to inject and redact in form KEY=VALUE (repeatable)")
+	var services multiStringFlag
+	mcpFlags.Var(&services, "service", "Sidecar service to spawn on session network in form NAME=IMAGE (repeatable)")
 	maskSecrets := mcpFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = parseInterspersed(mcpFlags, args)
@@ -243,6 +262,19 @@ func runMCP(args []string) {
 		sb = realSB
 	}
 	defer sb.Close()
+
+	for _, s := range services {
+		parts := strings.SplitN(s, "=", 2)
+		if len(parts) == 2 {
+			svcName := strings.TrimSpace(parts[0])
+			svcImage := strings.TrimSpace(parts[1])
+			fmt.Printf("[vessel] Spawning sidecar service %s (%s)...\n", svcName, svcImage)
+			_, err := sb.SpawnService(ctx, svcName, svcImage, nil, "")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[vessel] Warning: failed to spawn sidecar %s: %v\n", svcName, err)
+			}
+		}
+	}
 
 	server := mcp.NewServer(sb, cfg.WorkspacePath, os.Stdin, os.Stdout)
 	if err := server.Serve(ctx); err != nil {
@@ -493,6 +525,105 @@ func runProcess(args []string) {
 	}
 }
 
+func runService(args []string) {
+	serviceFlags := flag.NewFlagSet("service", flag.ExitOnError)
+	_ = parseInterspersed(serviceFlags, args)
+
+	remaining := serviceFlags.Args()
+	if len(remaining) == 0 || remaining[0] == "list" {
+		fmt.Println("[vessel] Active Sidecar Services:")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			fmt.Printf("  Docker disconnected: %v\n", err)
+			return
+		}
+		defer cli.Close()
+
+		containers, err := cli.ContainerList(ctx, container.ListOptions{All: true})
+		if err != nil {
+			fmt.Printf("  Error querying containers: %v\n", err)
+			return
+		}
+		found := 0
+		fmt.Println("  CONTAINER ID        SERVICE NAME        IMAGE               STATUS")
+		for _, c := range containers {
+			for _, name := range c.Names {
+				if strings.Contains(name, "vessel-svc-") {
+					found++
+					cID := c.ID
+					if len(cID) > 12 {
+						cID = cID[:12]
+					}
+					cleanName := strings.TrimPrefix(name, "/")
+					cleanName = strings.TrimPrefix(cleanName, "vessel-svc-")
+					if idx := strings.LastIndex(cleanName, "-"); idx != -1 {
+						cleanName = cleanName[:idx]
+					}
+					img := c.Image
+					if len(img) > 18 {
+						img = img[:15] + "..."
+					}
+					fmt.Printf("  %-18s  %-18s  %-18s  %s\n", cID, cleanName, img, c.State)
+				}
+			}
+		}
+		if found == 0 {
+			fmt.Println("  No active sidecar services found.")
+		}
+		return
+	}
+
+	action := remaining[0]
+	switch action {
+	case "stop":
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: service stop requires a service name or container ID")
+			fmt.Fprintln(os.Stderr, "Usage: vessel service stop <name|id>")
+			os.Exit(1)
+		}
+		target := remaining[1]
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Docker client error: %v\n", err)
+			os.Exit(1)
+		}
+		defer cli.Close()
+
+		stopTimeout := 2
+		_ = cli.ContainerStop(ctx, target, container.StopOptions{Timeout: &stopTimeout})
+		err = cli.ContainerRemove(ctx, target, container.RemoveOptions{Force: true})
+		if err != nil {
+			// Search by name substring
+			containers, _ := cli.ContainerList(ctx, container.ListOptions{All: true})
+			found := false
+			for _, c := range containers {
+				for _, name := range c.Names {
+					if strings.Contains(name, fmt.Sprintf("vessel-svc-%s-", target)) {
+						_ = cli.ContainerStop(ctx, c.ID, container.StopOptions{Timeout: &stopTimeout})
+						_ = cli.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				fmt.Fprintf(os.Stderr, "[vessel] Failed to stop service %s: %v\n", target, err)
+				os.Exit(1)
+			}
+		}
+		fmt.Printf("[vessel] Service %s stopped and removed.\n", target)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown service action: %s\n", action)
+		fmt.Fprintln(os.Stderr, "Usage: vessel service [list | stop <name>]")
+		os.Exit(1)
+	}
+}
+
 func printUsage() {
 	fmt.Printf("Vessel v%s — Local AI Agent Sandbox Engine\n\n", strings.TrimPrefix(Version, "v"))
 	fmt.Println("Usage:")
@@ -500,9 +631,11 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  exec        Execute a command inside the sandbox container")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --mask-secrets")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --service <NAME=IMG>, --mask-secrets")
 	fmt.Println("  mcp         Start stdio Model Context Protocol server")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --mask-secrets, --mock")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --service <NAME=IMG>, --mask-secrets, --mock")
+	fmt.Println("  service     Manage ephemeral sidecar containers")
+	fmt.Println("              Usage: vessel service [list | stop <name>]")
 	fmt.Println("  process     Manage background container processes")
 	fmt.Println("              Usage: vessel process [list | kill <id> | logs <id>] [--workspace <dir>]")
 	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
@@ -537,4 +670,7 @@ func printUsage() {
 	fmt.Println("Secret & DLP Masking:")
 	fmt.Println("  --secret        Inject environment secret into container and redact on egress (e.g. '--secret API_KEY=xyz')")
 	fmt.Println("  --mask-secrets  Enable automatic secret redaction and masking (default: true)")
+	fmt.Println()
+	fmt.Println("Sidecar Services:")
+	fmt.Println("  --service       Spawn background sidecar service on session network (e.g. '--service db=postgres:15-alpine')")
 }

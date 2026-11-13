@@ -39,7 +39,7 @@ Host Environment (Developer Workstation)
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 16 core tools over the Model Context Protocol:
+Vessel exposes 19 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
@@ -59,6 +59,9 @@ Vessel exposes 16 core tools over the Model Context Protocol:
 | `vessel_kill_process` | `process_id: string`, `signal?: string` | Sends termination signal (SIGTERM/SIGKILL) to stop a background process. |
 | `vessel_grep` | `pattern: string`, `path?: string`, `file_pattern?: string`, `max_matches?: int`, `case_sensitive?: bool` | Fast regex and substring search across workspace files with token estimates. |
 | `vessel_apply_patch` | `patch: string`, `dry_run?: bool` | Applies a unified diff patch atomically to a target file in the workspace sandbox. |
+| `vessel_spawn_service` | `name: string`, `image: string`, `env?: object`, `command?: string` | Spawns an isolated sidecar container on the session network; reachable via internal DNS `name:port`. |
+| `vessel_stop_service` | `name: string` | Stops and removes an active sidecar service from the session mesh. |
+| `vessel_list_services` | *(none)* | Returns status, image, uptime, and hostnames for all active sidecars. |
 
 ---
 

@@ -42,6 +42,7 @@ type DockerSandbox struct {
 	checkpoints map[string]string // tag -> imageID
 	snapshotMgr *SnapshotManager
 	procMgr     *ProcessManager
+	svcMgr      *ServiceManager
 	closed      bool
 }
 
@@ -180,6 +181,12 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		return nil, fmt.Errorf("failed to initialize workspace snapshot manager: %w", err)
 	}
 
+	svcMgr, err := NewServiceManager(cli, containerID, cfg.ContainerName)
+	if err != nil {
+		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+		return nil, fmt.Errorf("failed to initialize service manager: %w", err)
+	}
+
 	return &DockerSandbox{
 		cli:         cli,
 		containerID: containerID,
@@ -187,6 +194,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		checkpoints: make(map[string]string),
 		snapshotMgr: snapMgr,
 		procMgr:     NewProcessManager(),
+		svcMgr:      svcMgr,
 	}, nil
 }
 
@@ -414,11 +422,47 @@ func (d *DockerSandbox) Close() error {
 	if d.procMgr != nil {
 		_ = d.procMgr.Close()
 	}
+	if d.svcMgr != nil {
+		_ = d.svcMgr.Close(context.Background())
+	}
 
 	stopTimeout := 2
 	_ = d.cli.ContainerStop(context.Background(), d.containerID, container.StopOptions{Timeout: &stopTimeout})
 	err := d.cli.ContainerRemove(context.Background(), d.containerID, container.RemoveOptions{Force: true})
 	return err
+}
+
+// SpawnService launches an isolated sidecar container on the session network.
+func (d *DockerSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error) {
+	d.mu.RLock()
+	closed := d.closed
+	d.mu.RUnlock()
+	if closed {
+		return nil, ErrSandboxClosed
+	}
+	return d.svcMgr.SpawnService(ctx, name, image, env, cmd)
+}
+
+// StopService terminates and removes a sidecar container by name.
+func (d *DockerSandbox) StopService(ctx context.Context, name string) error {
+	d.mu.RLock()
+	closed := d.closed
+	d.mu.RUnlock()
+	if closed {
+		return ErrSandboxClosed
+	}
+	return d.svcMgr.StopService(ctx, name)
+}
+
+// ListServices returns metadata for all currently running sidecars.
+func (d *DockerSandbox) ListServices(ctx context.Context) ([]*ServiceInfo, error) {
+	d.mu.RLock()
+	closed := d.closed
+	d.mu.RUnlock()
+	if closed {
+		return nil, ErrSandboxClosed
+	}
+	return d.svcMgr.ListServices(ctx)
 }
 
 // StartProcess spawns a background or interactive process inside the container.

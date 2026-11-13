@@ -62,6 +62,9 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "--secret") || !strings.Contains(stdout, "--mask-secrets") {
 		t.Errorf("usage missing secret masking documentation: %s", stdout)
 	}
+	if !strings.Contains(stdout, "service") || !strings.Contains(stdout, "--service") {
+		t.Errorf("usage missing sidecar service documentation: %s", stdout)
+	}
 }
 
 func TestCLI_CheckpointAndRollback(t *testing.T) {
@@ -181,5 +184,15 @@ func TestCLI_ProcessSubcommand(t *testing.T) {
 
 	if !strings.Contains(stdout, "Background Processes") {
 		t.Errorf("expected process list header, got: %s", stdout)
+	}
+}
+
+func TestCLI_ServiceSubcommand(t *testing.T) {
+	stdout, _ := captureOutput(func() {
+		runService([]string{"list"})
+	})
+
+	if !strings.Contains(stdout, "Active Sidecar Services") {
+		t.Errorf("expected service list header, got: %s", stdout)
 	}
 }

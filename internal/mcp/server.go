@@ -486,6 +486,54 @@ func (s *Server) getToolsList() []Tool {
 				"required": []string{"patch"},
 			},
 		},
+		{
+			Name:        "vessel_spawn_service",
+			Description: "Spawns an isolated sidecar container (e.g. postgres, redis, mock-api) attached to the session internal network.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Unique DNS service name (e.g., 'postgres', 'redis', 'auth-db').",
+					},
+					"image": map[string]any{
+						"type":        "string",
+						"description": "Docker container image (e.g., 'postgres:15-alpine', 'redis:7-alpine').",
+					},
+					"env": map[string]any{
+						"type":        "object",
+						"description": "Optional environment variables key-value map (e.g., {'POSTGRES_PASSWORD': 'dev'}).",
+					},
+					"command": map[string]any{
+						"type":        "string",
+						"description": "Optional container command to execute.",
+					},
+				},
+				"required": []string{"name", "image"},
+			},
+		},
+		{
+			Name:        "vessel_stop_service",
+			Description: "Stops and removes an active sidecar container from the session mesh.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Name of the service to stop.",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "vessel_list_services",
+			Description: "Lists all active sidecar services running on the session mesh.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
 	}
 }
 
@@ -864,6 +912,50 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 
 		resPayload, _ := json.MarshalIndent(res, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_spawn_service":
+		var args struct {
+			Name    string            `json:"name"`
+			Image   string            `json:"image"`
+			Env     map[string]string `json:"env"`
+			Command string            `json:"command"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_spawn_service: %v", err))
+		}
+		if args.Name == "" || args.Image == "" {
+			return s.toolErrorResponse(req.ID, "name and image parameters are required")
+		}
+
+		info, err := s.sb.SpawnService(ctx, args.Name, args.Image, args.Env, args.Command)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to spawn service: %v", err))
+		}
+
+		payload, _ := json.MarshalIndent(info, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
+
+	case "vessel_stop_service":
+		var args struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil || args.Name == "" {
+			return s.toolErrorResponse(req.ID, "name parameter is required for vessel_stop_service")
+		}
+
+		if err := s.sb.StopService(ctx, args.Name); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to stop service: %v", err))
+		}
+		return s.toolSuccessResponse(req.ID, fmt.Sprintf("Service '%s' stopped and removed successfully.", args.Name))
+
+	case "vessel_list_services":
+		services, err := s.sb.ListServices(ctx)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to list services: %v", err))
+		}
+
+		payload, _ := json.MarshalIndent(services, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
 
 	default:
 		return s.toolErrorResponse(req.ID, fmt.Sprintf("unknown tool: %s", callParams.Name))

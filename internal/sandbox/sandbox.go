@@ -46,6 +46,11 @@ type Sandbox interface {
 	WriteProcessInput(ctx context.Context, id string, input string) (int, error)
 	KillProcess(ctx context.Context, id string, signal string) error
 	ListProcesses(ctx context.Context) ([]*ProcessInfo, error)
+
+	// Service mesh management methods
+	SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error)
+	StopService(ctx context.Context, name string) error
+	ListServices(ctx context.Context) ([]*ServiceInfo, error)
 }
 
 // MockSandbox provides an in-memory test implementation of the Sandbox interface.
@@ -56,15 +61,18 @@ type MockSandbox struct {
 	mockStderr  string
 	mockExit    int
 	procMgr     *ProcessManager
+	svcMgr      *ServiceManager
 }
 
 // NewMockSandbox creates an initialized MockSandbox.
 func NewMockSandbox() *MockSandbox {
+	sm, _ := NewServiceManager(nil, "", "mock")
 	return &MockSandbox{
 		checkpoints: make(map[string]bool),
 		mockStdout:  "mock output",
 		mockExit:    0,
 		procMgr:     NewProcessManager(),
+		svcMgr:      sm,
 	}
 }
 
@@ -115,7 +123,31 @@ func (m *MockSandbox) Close() error {
 	if m.procMgr != nil {
 		_ = m.procMgr.Close()
 	}
+	if m.svcMgr != nil {
+		_ = m.svcMgr.Close(context.Background())
+	}
 	return nil
+}
+
+func (m *MockSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	return m.svcMgr.SpawnService(ctx, name, image, env, cmd)
+}
+
+func (m *MockSandbox) StopService(ctx context.Context, name string) error {
+	if m.closed {
+		return ErrSandboxClosed
+	}
+	return m.svcMgr.StopService(ctx, name)
+}
+
+func (m *MockSandbox) ListServices(ctx context.Context) ([]*ServiceInfo, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	return m.svcMgr.ListServices(ctx)
 }
 
 func (m *MockSandbox) StartProcess(ctx context.Context, cmd string, pty bool, rows, cols int) (*ProcessInfo, error) {
