@@ -28,6 +28,7 @@ type DockerSandboxConfig struct {
 	NetworkMode   string
 	MemoryBytes   int64   // Memory limit in bytes (0 = unlimited)
 	CPUShares     float64 // CPU cores (e.g., 1.5, 2.0; 0 = unlimited)
+	Runtime       string  // OCI runtime (e.g., "runc", "runsc" for gVisor; empty = daemon default)
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -121,6 +122,7 @@ func DefaultDockerConfig(workspacePath string) DockerSandboxConfig {
 		NetworkMode:   "bridge",
 		MemoryBytes:   0,
 		CPUShares:     0,
+		Runtime:       "",
 	}
 }
 
@@ -154,7 +156,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		_ = reader.Close()
 	}
 
-	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares)
+	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +177,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 	}, nil
 }
 
-func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64) (string, error) {
+func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string) (string, error) {
 	if networkMode == "" {
 		networkMode = "bridge"
 	}
@@ -215,6 +217,9 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		Resources:   res,
 		CapDrop:     []string{"ALL"},
 		SecurityOpt: []string{"no-new-privileges:true"},
+	}
+	if runtime != "" {
+		hostCfg.Runtime = runtime
 	}
 
 	resp, err := cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
@@ -366,7 +371,7 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 
 	// 3. Spin up a fresh container using the checkpoint image with same workspace volume
 	newContainerName := fmt.Sprintf("%s-rollback-%d", d.cfg.ContainerName, time.Now().UnixNano())
-	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares)
+	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime)
 	if err != nil {
 		return fmt.Errorf("failed to restore container from checkpoint %s: %w", tag, err)
 	}

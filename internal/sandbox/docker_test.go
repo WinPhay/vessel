@@ -154,3 +154,15 @@ func TestDockerSandbox_ClosedGuards(t *testing.T) {
 		t.Errorf("Rollback on closed sandbox: expected ErrSandboxClosed, got: %v", err)
 	}
 }
+
+func TestDockerSandbox_RuntimeConfig(t *testing.T) {
+	cfg := DefaultDockerConfig("/tmp")
+	if cfg.Runtime != "" {
+		t.Errorf("expected default Runtime empty, got %q", cfg.Runtime)
+	}
+
+	cfg.Runtime = "runsc"
+	if cfg.Runtime != "runsc" {
+		t.Errorf("expected Runtime 'runsc', got %q", cfg.Runtime)
+	}
+}

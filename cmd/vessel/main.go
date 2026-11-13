@@ -81,12 +81,13 @@ func runExec(args []string) {
 	network := execFlags.String("network", "bridge", "Network mode (bridge, none, host)")
 	memStr := execFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	cpus := execFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
+	runtime := execFlags.String("runtime", "", "OCI container runtime (e.g. 'runc', 'runsc' for gVisor)")
 	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
 	if len(remaining) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: vessel exec requires a command to run inside the sandbox")
-		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] \"<command>\"")
+		fmt.Fprintln(os.Stderr, "Usage: vessel exec [--workspace <dir>] [--image <img>] [--network <mode>] [--memory <limit>] [--cpus <cores>] [--runtime <runtime>] \"<command>\"")
 		os.Exit(1)
 	}
 
@@ -112,8 +113,18 @@ func runExec(args []string) {
 	if *cpus > 0 {
 		cfg.CPUShares = *cpus
 	}
+	if *runtime != "" {
+		cfg.Runtime = *runtime
+	}
+	if *runtime != "" {
+		cfg.Runtime = *runtime
+	}
 
-	fmt.Printf("[vessel] Initializing sandbox container (image: %s, network: %s, workspace: %s)...\n", cfg.ImageName, cfg.NetworkMode, cfg.WorkspacePath)
+	runtimeDesc := cfg.Runtime
+	if runtimeDesc == "" {
+		runtimeDesc = "default"
+	}
+	fmt.Printf("[vessel] Initializing sandbox container (image: %s, network: %s, runtime: %s, workspace: %s)...\n", cfg.ImageName, cfg.NetworkMode, runtimeDesc, cfg.WorkspacePath)
 	sb, err := sandbox.NewDockerSandbox(ctx, cfg, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[vessel] Error: unable to start Docker sandbox: %v\n", err)
@@ -150,6 +161,7 @@ func runMCP(args []string) {
 	network := mcpFlags.String("network", "bridge", "Network mode (bridge, none, host)")
 	memStr := mcpFlags.String("memory", "", "Memory limit (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	cpus := mcpFlags.Float64("cpus", 0.0, "CPU core limit (e.g. 1.5, 2.0; default: unlimited)")
+	runtime := mcpFlags.String("runtime", "", "OCI container runtime (e.g. 'runc', 'runsc' for gVisor)")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = parseInterspersed(mcpFlags, args)
 
@@ -174,6 +186,9 @@ func runMCP(args []string) {
 	}
 	if *cpus > 0 {
 		cfg.CPUShares = *cpus
+	}
+	if *runtime != "" {
+		cfg.Runtime = *runtime
 	}
 
 	if *useMock {
@@ -320,6 +335,8 @@ func runStatus(args []string) {
 		_ = cli.Close()
 	}
 	fmt.Printf("  Default Mode: isolated (image: %s)\n", sandbox.ImageAlpineRaw)
+	fmt.Printf("  Drivers:      docker (active), mock, microvm (scaffold)\n")
+	fmt.Printf("  OCI Runtime:  daemon default (override via --runtime runsc for gVisor)\n")
 }
 
 func printUsage() {
@@ -329,9 +346,9 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  exec        Execute a command inside the sandbox container")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>")
 	fmt.Println("  mcp         Start stdio Model Context Protocol server")
-	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --mock")
+	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --mock")
 	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
 	fmt.Println("              Usage: vessel checkpoint [create <tag> | list | <tag>] [--workspace <dir>]")
 	fmt.Println("  rollback    Restore workspace to a named checkpoint")
@@ -355,4 +372,9 @@ func printUsage() {
 	fmt.Println("Resource Quotas:")
 	fmt.Println("  --memory    Limit container RAM (e.g. '512m', '2g', '4gb'; default: unlimited)")
 	fmt.Println("  --cpus      Limit container CPU cores (e.g. '1.5', '2.0'; default: unlimited)")
+	fmt.Println()
+	fmt.Println("OCI Runtimes:")
+	fmt.Println("  runc        Standard OCI container runtime (default)")
+	fmt.Println("  runsc       Google gVisor application-kernel sandbox for hostile code isolation")
+	fmt.Println("  kata        Kata Containers lightweight VM runtime")
 }

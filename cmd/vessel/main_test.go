@@ -56,6 +56,9 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "checkpoint") || !strings.Contains(stdout, "rollback") || !strings.Contains(stdout, "status") {
 		t.Errorf("usage missing new subcommands: %s", stdout)
 	}
+	if !strings.Contains(stdout, "runsc") || !strings.Contains(stdout, "OCI Runtimes") {
+		t.Errorf("usage missing runtime documentation: %s", stdout)
+	}
 }
 
 func TestCLI_CheckpointAndRollback(t *testing.T) {
@@ -122,6 +125,9 @@ func TestCLI_Status(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "Workspace:") {
 		t.Errorf("expected workspace in status, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Drivers:") || !strings.Contains(stdout, "OCI Runtime:") {
+		t.Errorf("expected drivers/runtime in status, got: %s", stdout)
 	}
 }
 
