@@ -108,6 +108,8 @@ func runExec(args []string) {
 	execFlags.Var(&services, "service", "Sidecar service to spawn on session network in form NAME=IMAGE (repeatable)")
 	useWorktree := execFlags.Bool("worktree", false, "Isolate session in an ephemeral Git worktree")
 	maskSecrets := execFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
+	session := execFlags.String("session", "", "Named session ID for reconnect and persistence")
+	persist := execFlags.Bool("persist", false, "Persist container, worktree, and service mesh across runs")
 	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
@@ -128,6 +130,12 @@ func runExec(args []string) {
 	cfg := sandbox.DefaultDockerConfig(*workspace)
 	if *useWorktree {
 		cfg.UseWorktree = true
+	}
+	if *session != "" {
+		cfg.SessionID = *session
+	}
+	if *persist {
+		cfg.Persistent = true
 	}
 	if *image != "" {
 		cfg.ImageName = *image
@@ -218,6 +226,8 @@ func runMCP(args []string) {
 	mcpFlags.Var(&services, "service", "Sidecar service to spawn on session network in form NAME=IMAGE (repeatable)")
 	useWorktree := mcpFlags.Bool("worktree", false, "Isolate session in an ephemeral Git worktree")
 	maskSecrets := mcpFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
+	session := mcpFlags.String("session", "", "Named session ID for reconnect and persistence")
+	persist := mcpFlags.Bool("persist", false, "Persist container, worktree, and service mesh across runs")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = parseInterspersed(mcpFlags, args)
 
@@ -232,6 +242,12 @@ func runMCP(args []string) {
 	cfg := sandbox.DefaultDockerConfig(*workspace)
 	if *useWorktree {
 		cfg.UseWorktree = true
+	}
+	if *session != "" {
+		cfg.SessionID = *session
+	}
+	if *persist {
+		cfg.Persistent = true
 	}
 	if *image != "" {
 		cfg.ImageName = *image
@@ -262,7 +278,11 @@ func runMCP(args []string) {
 	}
 
 	if *useMock {
-		sb = sandbox.NewMockSandbox()
+		mockSB := sandbox.NewMockSandbox()
+		if *session != "" {
+			mockSB.SetSessionInfo(*session, *persist, false)
+		}
+		sb = mockSB
 	} else {
 		realSB, err := sandbox.NewDockerSandbox(ctx, cfg, nil)
 		if err != nil {
@@ -380,6 +400,7 @@ func runRollback(args []string) {
 func runStatus(args []string) {
 	stFlags := flag.NewFlagSet("status", flag.ExitOnError)
 	workspace := stFlags.String("workspace", ".", "Host directory to inspect")
+	session := stFlags.String("session", "", "Inspect specific persistent session ID")
 	_ = parseInterspersed(stFlags, args)
 
 	absPath, err := filepath.Abs(*workspace)
@@ -389,6 +410,9 @@ func runStatus(args []string) {
 
 	fmt.Printf("Vessel Engine Status (v%s)\n", Version)
 	fmt.Printf("  Workspace:    %s\n", absPath)
+	if *session != "" {
+		fmt.Printf("  Target Session: %s\n", *session)
+	}
 
 	sm, err := sandbox.NewSnapshotManager(absPath)
 	if err != nil {
@@ -771,4 +795,8 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Git Worktree Shield:")
 	fmt.Println("  --worktree      Mount ephemeral Git worktree instead of raw workspace to shield host from unreviewed edits")
+	fmt.Println()
+	fmt.Println("Session Persistence:")
+	fmt.Println("  --session       Attach to or create a named persistent session (e.g. '--session my-project')")
+	fmt.Println("  --persist       Keep container, worktree, and service mesh alive upon CLI exit for subsequent reconnect")
 }

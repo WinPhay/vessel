@@ -11,6 +11,7 @@ import (
 
 	"github.com/WinPhay/vessel/internal/tokenfilter"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -39,6 +40,7 @@ type ServiceManager struct {
 	networkID            string
 	networkName          string
 	services             map[string]*ServiceInfo // name -> ServiceInfo
+	persistent           bool
 	mu                   sync.RWMutex
 	closed               bool
 }
@@ -62,32 +64,81 @@ func NewServiceManager(cli client.CommonAPIClient, workspaceContainerID, session
 		return sm, nil
 	}
 
-	// Create isolated bridge network
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	netResp, err := cli.NetworkCreate(ctx, netName, network.CreateOptions{
-		Driver:     "bridge",
-		Attachable: true,
-		Internal:   false, // Allows sidecars to pull/initialize if needed, but no host port exposure
-		Labels: map[string]string{
-			"vessel.managed":    "true",
-			"vessel.session_id": sessionID,
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session bridge network: %w", err)
+	// Check if network already exists
+	netInspect, err := cli.NetworkInspect(ctx, netName, network.InspectOptions{})
+	if err == nil {
+		sm.networkID = netInspect.ID
+		// Scan for existing service containers on this network with session label
+		filterArgs := filters.NewArgs()
+		filterArgs.Add("network", netInspect.ID)
+		filterArgs.Add("label", fmt.Sprintf("vessel.session_id=%s", sessionID))
+		containers, err := cli.ContainerList(ctx, container.ListOptions{All: true, Filters: filterArgs})
+		if err == nil {
+			for _, c := range containers {
+				svcName := c.Labels["vessel.service_name"]
+				if svcName == "" {
+					prefix := "vessel-svc-"
+					for _, name := range c.Names {
+						trimmed := strings.TrimPrefix(name, "/")
+						if strings.HasPrefix(trimmed, prefix) {
+							middle := strings.TrimPrefix(trimmed, prefix)
+							middle = strings.TrimSuffix(middle, "-"+sessionID)
+							svcName = middle
+							break
+						}
+					}
+				}
+				if svcName != "" {
+					sm.services[svcName] = &ServiceInfo{
+						ID:        c.ID,
+						Name:      svcName,
+						Image:     c.Image,
+						Status:    c.State,
+						CreatedAt: time.Unix(c.Created, 0),
+						Hostname:  svcName,
+					}
+				}
+			}
+		}
+	} else {
+		// Create isolated bridge network
+		netResp, err := cli.NetworkCreate(ctx, netName, network.CreateOptions{
+			Driver:     "bridge",
+			Attachable: true,
+			Internal:   false, // Allows sidecars to pull/initialize if needed, but no host port exposure
+			Labels: map[string]string{
+				"vessel.managed":    "true",
+				"vessel.session_id": sessionID,
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create session bridge network: %w", err)
+		}
+		sm.networkID = netResp.ID
 	}
-	sm.networkID = netResp.ID
 
 	// Attach workspace container to the network so it can resolve services by hostname
 	if workspaceContainerID != "" {
-		err = cli.NetworkConnect(ctx, sm.networkID, workspaceContainerID, &network.EndpointSettings{
-			Aliases: []string{"workspace"},
-		})
-		if err != nil {
-			_ = cli.NetworkRemove(context.Background(), sm.networkID)
-			return nil, fmt.Errorf("failed to attach workspace container to session network: %w", err)
+		alreadyConnected := false
+		if netInspect, err := cli.NetworkInspect(ctx, sm.networkID, network.InspectOptions{}); err == nil {
+			if _, ok := netInspect.Containers[workspaceContainerID]; ok {
+				alreadyConnected = true
+			}
+		}
+		if !alreadyConnected {
+			err = cli.NetworkConnect(ctx, sm.networkID, workspaceContainerID, &network.EndpointSettings{
+				Aliases: []string{"workspace"},
+			})
+			if err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "already exists") &&
+					!strings.Contains(strings.ToLower(err.Error()), "already connected") {
+					_ = cli.NetworkRemove(context.Background(), sm.networkID)
+					return nil, fmt.Errorf("failed to attach workspace container to session network: %w", err)
+				}
+			}
 		}
 	}
 
@@ -99,6 +150,20 @@ func (sm *ServiceManager) NetworkName() string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.networkName
+}
+
+// SetPersistent marks whether the service mesh should survive Close().
+func (sm *ServiceManager) SetPersistent(p bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.persistent = p
+}
+
+// IsPersistent returns whether persistence is active for the service mesh.
+func (sm *ServiceManager) IsPersistent() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.persistent
 }
 
 // SpawnService launches an isolated sidecar container on the session network.
@@ -165,6 +230,12 @@ func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName stri
 		Image: imageName,
 		Env:   envList,
 		Tty:   false,
+		Labels: map[string]string{
+			"vessel.managed":      "true",
+			"vessel.service":      "true",
+			"vessel.service_name": name,
+			"vessel.session_id":   sm.sessionID,
+		},
 	}
 	if cmd != "" {
 		containerCfg.Cmd = []string{"sh", "-c", cmd}
@@ -255,6 +326,10 @@ func (sm *ServiceManager) Close(ctx context.Context) error {
 		return nil
 	}
 	sm.closed = true
+
+	if sm.persistent {
+		return nil
+	}
 
 	if sm.cli == nil {
 		sm.services = make(map[string]*ServiceInfo)

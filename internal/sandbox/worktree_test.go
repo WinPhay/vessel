@@ -310,3 +310,66 @@ func TestWorktree_PersonaQA(t *testing.T) {
 		}
 	})
 }
+
+func TestWorktreeManager_PersistenceAndReconnect(t *testing.T) {
+	repoDir := createTestGitRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	ctx := context.Background()
+
+	// 1. First session with persistence
+	sessionID := "test-persist-session"
+	wm1, err := NewWorktreeManager(repoDir, sessionID)
+	if err != nil {
+		t.Fatalf("failed to create wm1: %v", err)
+	}
+	wm1.SetPersistent(true)
+	if !wm1.IsPersistent() {
+		t.Fatalf("expected persistent to be true")
+	}
+
+	// Mutate a file inside worktree
+	worktreeFile := filepath.Join(wm1.WorktreePath(), "persistent_agent_note.txt")
+	if err := os.WriteFile(worktreeFile, []byte("agent session step 1\n"), 0644); err != nil {
+		t.Fatalf("failed to write worktree file: %v", err)
+	}
+
+	// Close wm1 - with persistent=true, worktree must NOT be discarded
+	if err := wm1.Close(); err != nil {
+		t.Fatalf("wm1.Close failed: %v", err)
+	}
+
+	// Verify worktree directory still exists on host
+	if _, err := os.Stat(wm1.WorktreePath()); os.IsNotExist(err) {
+		t.Fatalf("expected worktree directory to survive persistent Close()")
+	}
+
+	// 2. Second session reconnecting to same sessionID
+	wm2, err := NewWorktreeManager(repoDir, sessionID)
+	if err != nil {
+		t.Fatalf("failed to reconnect to existing worktree: %v", err)
+	}
+
+	if wm2.BranchName() != "vessel/session-test-persist-session" {
+		t.Errorf("expected branch %s, got %s", "vessel/session-test-persist-session", wm2.BranchName())
+	}
+
+	// Verify existing file is preserved and detected in status
+	status, err := wm2.Status(ctx)
+	if err != nil {
+		t.Fatalf("wm2.Status failed: %v", err)
+	}
+	found := false
+	for _, f := range status.UntrackedFiles {
+		if f == "persistent_agent_note.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected persistent_agent_note.txt in untracked files, got: %+v", status.UntrackedFiles)
+	}
+
+	// Clean up explicitly via Discard
+	_ = wm2.Discard(ctx)
+}

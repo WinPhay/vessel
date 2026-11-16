@@ -251,3 +251,34 @@ func TestServiceMesh_PersonaQA(t *testing.T) {
 		}
 	})
 }
+
+func TestServiceManager_Persistence(t *testing.T) {
+	sm, err := NewServiceManager(nil, "", "persist-mesh-session")
+	if err != nil {
+		t.Fatalf("failed to create ServiceManager: %v", err)
+	}
+
+	sm.SetPersistent(true)
+	if !sm.IsPersistent() {
+		t.Errorf("expected persistent to be true")
+	}
+
+	ctx := context.Background()
+	_, err = sm.SpawnService(ctx, "cache", "redis:7-alpine", nil, "")
+	if err != nil {
+		t.Fatalf("failed to spawn service: %v", err)
+	}
+
+	// Close with persistent=true must preserve services in memory
+	if err := sm.Close(ctx); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	svcs, err := sm.ListServices(ctx)
+	if err != nil {
+		t.Fatalf("list services failed: %v", err)
+	}
+	if len(svcs) != 1 || svcs[0].Name != "cache" {
+		t.Errorf("expected 1 persistent service 'cache', got: %d", len(svcs))
+	}
+}

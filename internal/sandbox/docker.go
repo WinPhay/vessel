@@ -32,6 +32,8 @@ type DockerSandboxConfig struct {
 	Env           []string          // Custom environment variables (KEY=VALUE)
 	Secrets       map[string]string // Secrets to inject into container and register for redaction (KEY -> VALUE)
 	UseWorktree   bool              // Isolate session inside an ephemeral Git worktree
+	SessionID     string            // Named session ID for persistence and reconnect
+	Persistent    bool              // If true, do not destroy container, worktree, and service mesh on Close()
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -46,6 +48,7 @@ type DockerSandbox struct {
 	svcMgr      *ServiceManager
 	wtMgr       *WorktreeManager
 	closed      bool
+	reconnected bool
 }
 
 const (
@@ -140,6 +143,9 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 	if cfg.NetworkMode == "" {
 		cfg.NetworkMode = "bridge"
 	}
+	if cfg.SessionID != "" && (cfg.ContainerName == "" || strings.HasPrefix(cfg.ContainerName, "vessel-sandbox-")) {
+		cfg.ContainerName = fmt.Sprintf("vessel-sandbox-%s", cfg.SessionID)
+	}
 
 	var err error
 	if cli == nil {
@@ -171,16 +177,54 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		tokenfilter.RegisterSecret(k, v)
 	}
 
-	containerID, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime, combinedEnv)
-	if err != nil {
-		return nil, err
+	var containerID string
+	reconnected := false
+
+	if cli != nil && cfg.SessionID != "" {
+		inspect, inspectErr := cli.ContainerInspect(ctx, cfg.ContainerName)
+		if inspectErr == nil {
+			containerID = inspect.ID
+			if !inspect.State.Running {
+				if err := cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+					return nil, fmt.Errorf("failed to restart persistent session container: %w", err)
+				}
+			}
+			reconnected = true
+		}
+	}
+
+	if !reconnected {
+		labels := map[string]string{
+			"vessel.managed":   "true",
+			"vessel.workspace": cfg.WorkspacePath,
+		}
+		if cfg.SessionID != "" {
+			labels["vessel.session_id"] = cfg.SessionID
+		}
+		if cfg.Persistent {
+			labels["vessel.persistent"] = "true"
+		}
+
+		id, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime, combinedEnv, labels)
+		if err != nil {
+			return nil, err
+		}
+		containerID = id
+	}
+
+	sessionKey := cfg.SessionID
+	if sessionKey == "" {
+		sessionKey = cfg.ContainerName
 	}
 
 	var wtMgr *WorktreeManager
 	if cfg.UseWorktree {
-		wm, err := NewWorktreeManager(cfg.WorkspacePath, cfg.ContainerName)
+		wm, err := NewWorktreeManager(cfg.WorkspacePath, sessionKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize git worktree manager: %w", err)
+		}
+		if cfg.Persistent {
+			wm.SetPersistent(true)
 		}
 		wtMgr = wm
 		if wm.IsWorktree() {
@@ -193,18 +237,24 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		if wtMgr != nil {
 			_ = wtMgr.Close()
 		}
-		// Clean up container if snapshot manager initialization fails
-		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+		if !reconnected && !cfg.Persistent {
+			_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+		}
 		return nil, fmt.Errorf("failed to initialize workspace snapshot manager: %w", err)
 	}
 
-	svcMgr, err := NewServiceManager(cli, containerID, cfg.ContainerName)
+	svcMgr, err := NewServiceManager(cli, containerID, sessionKey)
 	if err != nil {
 		if wtMgr != nil {
 			_ = wtMgr.Close()
 		}
-		_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+		if !reconnected && !cfg.Persistent {
+			_ = cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+		}
 		return nil, fmt.Errorf("failed to initialize service manager: %w", err)
+	}
+	if cfg.Persistent {
+		svcMgr.SetPersistent(true)
 	}
 
 	return &DockerSandbox{
@@ -216,10 +266,11 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		procMgr:     NewProcessManager(),
 		svcMgr:      svcMgr,
 		wtMgr:       wtMgr,
+		reconnected: reconnected,
 	}, nil
 }
 
-func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string, customEnv []string) (string, error) {
+func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string, customEnv []string, labels map[string]string) (string, error) {
 	if networkMode == "" {
 		networkMode = "bridge"
 	}
@@ -240,6 +291,7 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		AttachStdout: true,
 		AttachStderr: true,
 		Env:          containerEnv,
+		Labels:       labels,
 	}
 
 	res := container.Resources{}
@@ -421,7 +473,18 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 	for k, v := range d.cfg.Secrets {
 		combinedEnv = append(combinedEnv, fmt.Sprintf("%s=%s", k, v))
 	}
-	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime, combinedEnv)
+	labels := map[string]string{
+		"vessel.managed":   "true",
+		"vessel.workspace": d.cfg.WorkspacePath,
+	}
+	if d.cfg.SessionID != "" {
+		labels["vessel.session_id"] = d.cfg.SessionID
+	}
+	if d.cfg.Persistent {
+		labels["vessel.persistent"] = "true"
+	}
+
+	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime, combinedEnv, labels)
 	if err != nil {
 		return fmt.Errorf("failed to restore container from checkpoint %s: %w", tag, err)
 	}
@@ -450,10 +513,42 @@ func (d *DockerSandbox) Close() error {
 		_ = d.wtMgr.Close()
 	}
 
+	if d.cfg.Persistent {
+		return nil
+	}
+
 	stopTimeout := 2
 	_ = d.cli.ContainerStop(context.Background(), d.containerID, container.StopOptions{Timeout: &stopTimeout})
 	err := d.cli.ContainerRemove(context.Background(), d.containerID, container.RemoveOptions{Force: true})
 	return err
+}
+
+// SessionID returns the configured session identifier.
+func (d *DockerSandbox) SessionID() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.cfg.SessionID
+}
+
+// IsPersistent returns whether persistence is active for this sandbox.
+func (d *DockerSandbox) IsPersistent() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.cfg.Persistent
+}
+
+// IsReconnected returns true if this sandbox reconnected to an existing session container.
+func (d *DockerSandbox) IsReconnected() bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.reconnected
+}
+
+// ContainerID returns the running container ID.
+func (d *DockerSandbox) ContainerID() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.containerID
 }
 
 // WorktreeStatus returns current working tree status.

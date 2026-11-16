@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/WinPhay/vessel/internal/sandbox"
 )
@@ -464,5 +465,51 @@ func TestMCPServerWorktreeTools(t *testing.T) {
 	_ = json.Unmarshal([]byte(diffText), &wtDiff)
 	if wtDiff.TokenEstimate < 0 {
 		t.Errorf("invalid token estimate: %d", wtDiff.TokenEstimate)
+	}
+}
+
+func TestServer_SessionStatusReporting(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	mockSB.SetSessionInfo("my-agent-session", true, true)
+
+	var inBuf bytes.Buffer
+	var outBuf bytes.Buffer
+
+	server := NewServer(mockSB, "/tmp/workspace", &inBuf, &outBuf)
+	reqStatus := `{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"vessel_status","arguments":{}}}` + "\n"
+	inBuf.WriteString(reqStatus)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := server.Serve(ctx); err != nil {
+		t.Fatalf("serve error: %v", err)
+	}
+
+	line, err := outBuf.ReadString('\n')
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error on vessel_status: %v", resp.Error)
+	}
+
+	statusMap := resp.Result.(map[string]any)
+	content := statusMap["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+
+	if !strings.Contains(text, "my-agent-session") {
+		t.Errorf("expected session_id 'my-agent-session' in status output, got: %s", text)
+	}
+	if !strings.Contains(text, `"persistent": true`) {
+		t.Errorf("expected persistent: true in status output, got: %s", text)
+	}
+	if !strings.Contains(text, `"reconnected": true`) {
+		t.Errorf("expected reconnected: true in status output, got: %s", text)
 	}
 }

@@ -68,6 +68,18 @@ type MockSandbox struct {
 	procMgr     *ProcessManager
 	svcMgr      *ServiceManager
 	wtMgr       *WorktreeManager
+	sessionID   string
+	persistent  bool
+	reconnected bool
+}
+
+func (m *MockSandbox) SessionID() string   { return m.sessionID }
+func (m *MockSandbox) IsPersistent() bool  { return m.persistent }
+func (m *MockSandbox) IsReconnected() bool { return m.reconnected }
+func (m *MockSandbox) SetSessionInfo(id string, persistent, reconnected bool) {
+	m.sessionID = id
+	m.persistent = persistent
+	m.reconnected = reconnected
 }
 
 // NewMockSandbox creates an initialized MockSandbox.

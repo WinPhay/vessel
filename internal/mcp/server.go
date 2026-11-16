@@ -668,6 +668,17 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			"workspace": s.workspace,
 			"version":   ServerVersion,
 		}
+		if sessProvider, ok := s.sb.(interface {
+			SessionID() string
+			IsPersistent() bool
+			IsReconnected() bool
+		}); ok {
+			if sid := sessProvider.SessionID(); sid != "" {
+				statusData["session_id"] = sid
+				statusData["persistent"] = sessProvider.IsPersistent()
+				statusData["reconnected"] = sessProvider.IsReconnected()
+			}
+		}
 		payload, _ := json.MarshalIndent(statusData, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))
 

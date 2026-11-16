@@ -51,6 +51,7 @@ type WorktreeManager struct {
 	baseBranch   string
 	isGitRepo    bool
 	isWorktree   bool
+	persistent   bool
 	mu           sync.RWMutex
 	closed       bool
 }
@@ -101,14 +102,36 @@ func NewWorktreeManager(repoRoot, sessionID string) (*WorktreeManager, error) {
 		}
 	}
 
+	// Check if worktree directory already exists and is a valid worktree
+	if _, err := os.Stat(worktreeDir); err == nil && IsGitRepo(worktreeDir) {
+		return &WorktreeManager{
+			repoRoot:     absRoot,
+			worktreePath: worktreeDir,
+			branchName:   branchName,
+			baseBranch:   baseBranch,
+			isGitRepo:    true,
+			isWorktree:   true,
+		}, nil
+	}
+
 	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create worktree parent dir: %w", err)
 	}
 
-	// Create git worktree
-	cmdAdd := exec.Command("git", "-C", absRoot, "worktree", "add", "-b", branchName, worktreeDir, "HEAD")
-	if out, err := cmdAdd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("git worktree add failed: %s (%w)", strings.TrimSpace(string(out)), err)
+	// Check if branch already exists
+	cmdCheckBranch := exec.Command("git", "-C", absRoot, "rev-parse", "--verify", branchName)
+	if err := cmdCheckBranch.Run(); err == nil {
+		// Branch exists, add worktree checking out existing branch
+		cmdAdd := exec.Command("git", "-C", absRoot, "worktree", "add", worktreeDir, branchName)
+		if out, err := cmdAdd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("git worktree add (existing branch) failed: %s (%w)", strings.TrimSpace(string(out)), err)
+		}
+	} else {
+		// Create git worktree with new branch
+		cmdAdd := exec.Command("git", "-C", absRoot, "worktree", "add", "-b", branchName, worktreeDir, "HEAD")
+		if out, err := cmdAdd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("git worktree add failed: %s (%w)", strings.TrimSpace(string(out)), err)
+		}
 	}
 
 	return &WorktreeManager{
@@ -331,8 +354,28 @@ func (wm *WorktreeManager) Discard(ctx context.Context) error {
 	return nil
 }
 
+// SetPersistent marks whether the worktree should survive Close().
+func (wm *WorktreeManager) SetPersistent(p bool) {
+	wm.mu.Lock()
+	defer wm.mu.Unlock()
+	wm.persistent = p
+}
+
+// IsPersistent returns whether persistence is active.
+func (wm *WorktreeManager) IsPersistent() bool {
+	wm.mu.RLock()
+	defer wm.mu.RUnlock()
+	return wm.persistent
+}
+
 // Close cleans up worktree if it was marked ephemeral.
 func (wm *WorktreeManager) Close() error {
+	wm.mu.RLock()
+	persistent := wm.persistent
+	wm.mu.RUnlock()
+	if persistent {
+		return nil
+	}
 	return wm.Discard(context.Background())
 }
 
