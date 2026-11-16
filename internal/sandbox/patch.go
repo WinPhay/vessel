@@ -39,7 +39,7 @@ type diffHunk struct {
 }
 
 // ApplyPatch applies a unified diff to a target file in workspaceRoot.
-func ApplyPatch(workspaceRoot, patchContent string, dryRun bool) (*PatchResult, error) {
+func ApplyPatch(workspaceRoot, patchContent string, dryRun bool, policy ...*PathPolicy) (*PatchResult, error) {
 	patchContent = strings.TrimSpace(patchContent)
 	if patchContent == "" {
 		return nil, ErrEmptyPatch
@@ -51,6 +51,12 @@ func ApplyPatch(workspaceRoot, patchContent string, dryRun bool) (*PatchResult, 
 	}
 	if len(hunks) == 0 {
 		return nil, ErrNoHunksFound
+	}
+
+	if len(policy) > 0 && policy[0] != nil {
+		if err := policy[0].CheckWrite(targetPath); err != nil {
+			return nil, err
+		}
 	}
 
 	// Validate target path is jailed in workspace

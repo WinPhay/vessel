@@ -766,6 +766,13 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 				statusData["budget"] = b
 			}
 		}
+		if pol := s.sb.Policy(); pol != nil {
+			statusData["policy"] = map[string]any{
+				"read_only":  pol.ReadOnly,
+				"ro_paths":   len(pol.ROPaths),
+				"deny_paths": len(pol.DenyPaths),
+			}
+		}
 		payload, _ := json.MarshalIndent(statusData, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))
 
@@ -782,7 +789,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			return s.toolErrorResponse(req.ID, "path parameter is required")
 		}
 
-		res, err := sandbox.ReadFile(s.workspace, args.Path, args.StartLine, args.EndLine)
+		res, err := sandbox.ReadFile(s.workspace, args.Path, args.StartLine, args.EndLine, s.sb.Policy())
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("read failed: %v", err))
 		}
@@ -806,7 +813,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			overwrite = *args.Overwrite
 		}
 
-		res, err := sandbox.WriteFile(s.workspace, args.Path, args.Content, overwrite)
+		res, err := sandbox.WriteFile(s.workspace, args.Path, args.Content, overwrite, s.sb.Policy())
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("write failed: %v", err))
 		}
@@ -825,7 +832,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			dirPath = args.Path
 		}
 
-		res, err := sandbox.ListDir(s.workspace, dirPath, args.Recursive, args.MaxDepth)
+		res, err := sandbox.ListDir(s.workspace, dirPath, args.Recursive, args.MaxDepth, s.sb.Policy())
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("list failed: %v", err))
 		}
@@ -1062,7 +1069,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			FilePattern:   args.FilePattern,
 			MaxMatches:    args.MaxMatches,
 			CaseSensitive: args.CaseSensitive,
-		})
+		}, s.sb.Policy())
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("grep failed: %v", err))
 		}
@@ -1082,7 +1089,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			return s.toolErrorResponse(req.ID, "patch parameter is required")
 		}
 
-		res, err := sandbox.ApplyPatch(s.workspace, args.Patch, args.DryRun)
+		res, err := sandbox.ApplyPatch(s.workspace, args.Patch, args.DryRun, s.sb.Policy())
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("patch failed: %v", err))
 		}

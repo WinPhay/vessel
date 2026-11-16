@@ -118,6 +118,12 @@ func runExec(args []string) {
 	persist := execFlags.Bool("persist", false, "Persist container, worktree, and service mesh across runs")
 	maxTokens := execFlags.Int64("max-tokens", 0, "Max cumulative tokens permitted for session before tripping circuit breaker (0 = unlimited)")
 	maxDuration := execFlags.String("max-duration", "", "Max cumulative execution duration (e.g. '30s', '5m', '1h'; default: unlimited)")
+	readOnly := execFlags.Bool("read-only", false, "Mount workspace in read-only mode")
+	execFlags.BoolVar(readOnly, "ro", false, "Alias for --read-only")
+	var roPaths multiStringFlag
+	execFlags.Var(&roPaths, "ro-path", "Path or pattern within workspace to protect with read-only policy (repeatable)")
+	var denyPaths multiStringFlag
+	execFlags.Var(&denyPaths, "deny-path", "Path or pattern within workspace to deny access to completely (repeatable)")
 	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
@@ -155,6 +161,15 @@ func runExec(args []string) {
 			os.Exit(1)
 		}
 		cfg.MaxDuration = d
+	}
+	if *readOnly {
+		cfg.PathPolicy.ReadOnly = true
+	}
+	if len(roPaths) > 0 {
+		cfg.PathPolicy.ROPaths = append(cfg.PathPolicy.ROPaths, roPaths...)
+	}
+	if len(denyPaths) > 0 {
+		cfg.PathPolicy.DenyPaths = append(cfg.PathPolicy.DenyPaths, denyPaths...)
 	}
 	if *image != "" {
 		cfg.ImageName = *image
@@ -270,6 +285,12 @@ func runMCP(args []string) {
 	persist := mcpFlags.Bool("persist", false, "Persist container, worktree, and service mesh across runs")
 	maxTokens := mcpFlags.Int64("max-tokens", 0, "Max cumulative tokens permitted for session before tripping circuit breaker (0 = unlimited)")
 	maxDuration := mcpFlags.String("max-duration", "", "Max cumulative execution duration (e.g. '30s', '5m', '1h'; default: unlimited)")
+	readOnly := mcpFlags.Bool("read-only", false, "Mount workspace in read-only mode")
+	mcpFlags.BoolVar(readOnly, "ro", false, "Alias for --read-only")
+	var roPaths multiStringFlag
+	mcpFlags.Var(&roPaths, "ro-path", "Path or pattern within workspace to protect with read-only policy (repeatable)")
+	var denyPaths multiStringFlag
+	mcpFlags.Var(&denyPaths, "deny-path", "Path or pattern within workspace to deny access to completely (repeatable)")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = parseInterspersed(mcpFlags, args)
 
@@ -302,6 +323,15 @@ func runMCP(args []string) {
 		}
 		cfg.MaxDuration = d
 	}
+	if *readOnly {
+		cfg.PathPolicy.ReadOnly = true
+	}
+	if len(roPaths) > 0 {
+		cfg.PathPolicy.ROPaths = append(cfg.PathPolicy.ROPaths, roPaths...)
+	}
+	if len(denyPaths) > 0 {
+		cfg.PathPolicy.DenyPaths = append(cfg.PathPolicy.DenyPaths, denyPaths...)
+	}
 	if *image != "" {
 		cfg.ImageName = *image
 	}
@@ -332,6 +362,7 @@ func runMCP(args []string) {
 
 	if *useMock {
 		mockSB := sandbox.NewMockSandbox()
+		mockSB.SetPolicy(&cfg.PathPolicy)
 		if *session != "" {
 			mockSB.SetSessionInfo(*session, *persist, false)
 		}
@@ -1048,4 +1079,9 @@ func printUsage() {
 	fmt.Println("Budget & Circuit Breakers:")
 	fmt.Println("  --max-tokens    Max cumulative tokens permitted before tripping circuit breaker (e.g. '--max-tokens 50000')")
 	fmt.Println("  --max-duration  Max cumulative execution duration before tripping circuit breaker (e.g. '--max-duration 15m')")
+	fmt.Println()
+	fmt.Println("Path Access Policies:")
+	fmt.Println("  --read-only, --ro Mount workspace in read-only mode")
+	fmt.Println("  --ro-path         Protect relative workspace path or pattern with read-only policy (repeatable)")
+	fmt.Println("  --deny-path       Deny access to relative workspace path or pattern completely (repeatable)")
 }

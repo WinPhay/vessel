@@ -101,7 +101,12 @@ func ResolveSecurePath(workspaceRoot, userPath string) (string, error) {
 }
 
 // ReadFile securely reads a file within workspaceRoot with optional line pagination.
-func ReadFile(workspaceRoot, userPath string, startLine, endLine int) (*ReadFileResult, error) {
+func ReadFile(workspaceRoot, userPath string, startLine, endLine int, policy ...*PathPolicy) (*ReadFileResult, error) {
+	if len(policy) > 0 && policy[0] != nil {
+		if err := policy[0].CheckRead(userPath); err != nil {
+			return nil, err
+		}
+	}
 	targetPath, err := ResolveSecurePath(workspaceRoot, userPath)
 	if err != nil {
 		return nil, err
@@ -173,7 +178,12 @@ func ReadFile(workspaceRoot, userPath string, startLine, endLine int) (*ReadFile
 }
 
 // WriteFile securely writes content to a file inside workspaceRoot using atomic replace.
-func WriteFile(workspaceRoot, userPath, content string, overwrite bool) (*WriteFileResult, error) {
+func WriteFile(workspaceRoot, userPath, content string, overwrite bool, policy ...*PathPolicy) (*WriteFileResult, error) {
+	if len(policy) > 0 && policy[0] != nil {
+		if err := policy[0].CheckWrite(userPath); err != nil {
+			return nil, err
+		}
+	}
 	targetPath, err := ResolveSecurePath(workspaceRoot, userPath)
 	if err != nil {
 		return nil, err
@@ -225,7 +235,17 @@ func WriteFile(workspaceRoot, userPath, content string, overwrite bool) (*WriteF
 }
 
 // ListDir securely lists directory contents inside workspaceRoot.
-func ListDir(workspaceRoot, userPath string, recursive bool, maxDepth int) (*ListDirResult, error) {
+func ListDir(workspaceRoot, userPath string, recursive bool, maxDepth int, policy ...*PathPolicy) (*ListDirResult, error) {
+	var pol *PathPolicy
+	if len(policy) > 0 && policy[0] != nil {
+		pol = policy[0]
+	}
+	if pol != nil {
+		if err := pol.CheckRead(userPath); err != nil {
+			return nil, err
+		}
+	}
+
 	targetPath, err := ResolveSecurePath(workspaceRoot, userPath)
 	if err != nil {
 		return nil, err
@@ -301,6 +321,10 @@ func ListDir(workspaceRoot, userPath string, recursive bool, maxDepth int) (*Lis
 
 	if err != nil {
 		return nil, fmt.Errorf("failed listing directory: %w", err)
+	}
+
+	if pol != nil {
+		entries = pol.FilterEntries(entries)
 	}
 
 	return &ListDirResult{

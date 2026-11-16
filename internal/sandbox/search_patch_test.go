@@ -253,3 +253,65 @@ func TestSearchPatch_PersonaQA(t *testing.T) {
 		t.Errorf("multi-hunk output mismatch:\nexpected:\n%s\ngot:\n%s", expectedFinal, string(finalBytes))
 	}
 }
+
+func TestSearchAndPatch_WithPolicy(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-searchpatch-policy-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	envFile := filepath.Join(tempDir, ".env")
+	_ = os.WriteFile(envFile, []byte("API_KEY=initial\n"), 0644)
+
+	secretFile := filepath.Join(tempDir, "secrets.txt")
+	_ = os.WriteFile(secretFile, []byte("supersecrettoken\n"), 0644)
+
+	appFile := filepath.Join(tempDir, "app.txt")
+	_ = os.WriteFile(appFile, []byte("hello world\n"), 0644)
+
+	policy := &PathPolicy{
+		ROPaths:   []string{".env"},
+		DenyPaths: []string{"secrets.txt"},
+	}
+
+	// 1. Patch to ROPath rejected
+	envPatch := `--- a/.env
++++ b/.env
+@@ -1,1 +1,1 @@
+-API_KEY=initial
++API_KEY=corrupted
+`
+	_, err = ApplyPatch(tempDir, envPatch, false, policy)
+	if !errors.Is(err, ErrPathReadOnly) {
+		t.Errorf("expected ErrPathReadOnly for patching .env, got: %v", err)
+	}
+
+	// 2. Patch with global ReadOnly rejected
+	roPolicy := &PathPolicy{ReadOnly: true}
+	appPatch := `--- a/app.txt
++++ b/app.txt
+@@ -1,1 +1,1 @@
+-hello world
++hello universe
+`
+	_, err = ApplyPatch(tempDir, appPatch, false, roPolicy)
+	if !errors.Is(err, ErrWorkspaceReadOnly) {
+		t.Errorf("expected ErrWorkspaceReadOnly for patching app.txt, got: %v", err)
+	}
+
+	// 3. Patch to allowed file succeeds
+	patchRes, err := ApplyPatch(tempDir, appPatch, false, policy)
+	if err != nil || patchRes.LinesAdded != 1 {
+		t.Errorf("expected patch success on allowed file, got: %v, res: %+v", err, patchRes)
+	}
+
+	// 4. Grep ignores denied file
+	grepRes, err := GrepWorkspace(tempDir, GrepOptions{Pattern: "supersecrettoken"}, policy)
+	if err != nil {
+		t.Fatalf("grep failed: %v", err)
+	}
+	if len(grepRes.Matches) != 0 {
+		t.Errorf("expected 0 matches for denied file, got %d", len(grepRes.Matches))
+	}
+}

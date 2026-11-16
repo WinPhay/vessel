@@ -35,6 +35,7 @@ Host Environment (Developer Workstation)
 4. **Token-Hygiene & Zero-Leak Invariant**: All raw command stdout/stderr, process output, grep results, and file reads must pass through the token scrubber and secret vault before returning to the MCP client. ANSI codes, terminal escapes, and sensitive credentials (API keys, private keys, database URLs, high-entropy tokens, registered secrets) are stripped and redacted to guarantee zero secret egress.
 5. **Resource-Bounding Invariant**: Containers strictly enforce configurable kernel cgroup limits (`MemoryBytes`, `NanoCPUs`) to prevent infinite recursion, memory leaks, or CPU starvation on the host system.
 6. **Git Worktree Shield Invariant**: When `--worktree` is enabled, the agent executes within an ephemeral Git worktree located at `.vessel/worktrees/vessel-<session>` on an isolated session branch. The developer's primary working tree remains 100% clean and untouched. Modifications can be reviewed via `vessel_worktree_diff` and committed via `vessel_worktree_commit` or discarded automatically on session termination.
+7. **Workspace Access Policy Invariant**: When `--read-only` is active, the workspace is mounted strictly `:ro` with a writeable `/tmp` tmpfs scratch space; file write operations (`vessel_write_file`, `vessel_apply_patch`) are rejected. When fine-grained `--ro-path` or `--deny-path` rules are configured, path protection is enforced at both the container mount layer and MCP tool layer.
 
 ---
 

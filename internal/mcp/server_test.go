@@ -668,3 +668,76 @@ func TestMCPServerCheckpointDiff(t *testing.T) {
 		t.Errorf("expected isError: true for missing tag_a argument, got: %v", resp.Result)
 	}
 }
+
+func TestMCPServerPathPolicy(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	policy := &sandbox.PathPolicy{
+		ReadOnly:  false,
+		ROPaths:   []string{".env"},
+		DenyPaths: []string{".secrets"},
+	}
+	mockSB.SetPolicy(policy)
+
+	tempDir, err := os.MkdirTemp("", "vessel-mcp-policy-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	_ = os.WriteFile(filepath.Join(tempDir, ".secrets"), []byte("classified"), 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, ".env"), []byte("KEY=123"), 0644)
+
+	var inBuf, outBuf bytes.Buffer
+	server := NewServer(mockSB, tempDir, &inBuf, &outBuf)
+	ctx := context.Background()
+
+	// 1. Write to .env blocked by RO policy
+	reqWrite := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_write_file","arguments":{"path":".env","content":"KEY=hacked"}}}` + "\n"
+	inBuf.WriteString(reqWrite)
+	_ = server.Serve(ctx)
+
+	var resp JSONRPCResponse
+	line, err := outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &resp) != nil {
+		t.Fatalf("failed reading write response: %v", err)
+	}
+	resMap, ok := resp.Result.(map[string]any)
+	if !ok || resMap["isError"] != true {
+		t.Errorf("expected isError: true for write to protected .env, got: %v", resp.Result)
+	}
+
+	// 2. Read from .secrets blocked by Deny policy
+	outBuf.Reset()
+	inBuf.Reset()
+	reqRead := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vessel_read_file","arguments":{"path":".secrets"}}}` + "\n"
+	inBuf.WriteString(reqRead)
+	_ = server.Serve(ctx)
+
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &resp) != nil {
+		t.Fatalf("failed reading read response: %v", err)
+	}
+	resMap, ok = resp.Result.(map[string]any)
+	if !ok || resMap["isError"] != true {
+		t.Errorf("expected isError: true for read from denied .secrets, got: %v", resp.Result)
+	}
+
+	// 3. vessel_status reports policy metrics
+	outBuf.Reset()
+	inBuf.Reset()
+	reqStatus := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vessel_status","arguments":{}}}` + "\n"
+	inBuf.WriteString(reqStatus)
+	_ = server.Serve(ctx)
+
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &resp) != nil || resp.Error != nil {
+		t.Fatalf("failed reading status response: %v", err)
+	}
+	resMap = resp.Result.(map[string]any)
+	content := resMap["content"].([]any)
+	textJSON := content[0].(map[string]any)["text"].(string)
+
+	if !strings.Contains(textJSON, `"policy"`) || !strings.Contains(textJSON, `"ro_paths": 1`) {
+		t.Errorf("expected policy metrics in status JSON, got:\n%s", textJSON)
+	}
+}

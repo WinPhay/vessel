@@ -321,3 +321,27 @@ func TestCLI_CheckpointDiff(t *testing.T) {
 		t.Errorf("expected diff v1->v2 in output, got:\n%s", stdout)
 	}
 }
+
+func TestCLI_PathPolicyFlags(t *testing.T) {
+	flags := flag.NewFlagSet("test_policy", flag.ContinueOnError)
+	readOnly := flags.Bool("read-only", false, "read-only")
+	flags.BoolVar(readOnly, "ro", false, "ro alias")
+	var roPaths multiStringFlag
+	flags.Var(&roPaths, "ro-path", "ro paths")
+	var denyPaths multiStringFlag
+	flags.Var(&denyPaths, "deny-path", "deny paths")
+
+	args := []string{"--read-only", "--ro-path", ".env", "-ro-path", "config/*.json", "--deny-path", ".secrets"}
+	if err := parseInterspersed(flags, args); err != nil {
+		t.Fatalf("failed to parse policy flags: %v", err)
+	}
+	if !*readOnly {
+		t.Errorf("expected readOnly to be true")
+	}
+	if len(roPaths) != 2 || roPaths[0] != ".env" || roPaths[1] != "config/*.json" {
+		t.Errorf("unexpected roPaths: %+v", roPaths)
+	}
+	if len(denyPaths) != 1 || denyPaths[0] != ".secrets" {
+		t.Errorf("unexpected denyPaths: %+v", denyPaths)
+	}
+}

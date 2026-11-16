@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,5 +151,64 @@ func TestResolveSecurePath_SymlinkedParent(t *testing.T) {
 	_, err = WriteFile(tempWorkspace, "linked_dir/evil.sh", "malicious", true)
 	if err != ErrPathEscapesJail {
 		t.Errorf("WriteFile through symlinked parent expected ErrPathEscapesJail, got: %v", err)
+	}
+}
+
+func TestFileOps_WithPolicy(t *testing.T) {
+	tempWorkspace, err := os.MkdirTemp("", "vessel-policy-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp workspace: %v", err)
+	}
+	defer os.RemoveAll(tempWorkspace)
+
+	policy := &PathPolicy{
+		ReadOnly:  false,
+		ROPaths:   []string{".env", "config/*.json"},
+		DenyPaths: []string{".secrets", "keys/**"},
+	}
+
+	// 1. Normal write
+	_, err = WriteFile(tempWorkspace, "src/main.go", "package main", true, policy)
+	if err != nil {
+		t.Errorf("expected normal write allowed, got: %v", err)
+	}
+
+	// 2. Read-Only path write blocked
+	_, err = WriteFile(tempWorkspace, ".env", "SECRET=123", true, policy)
+	if !errors.Is(err, ErrPathReadOnly) {
+		t.Errorf("expected ErrPathReadOnly for .env, got: %v", err)
+	}
+	_, err = WriteFile(tempWorkspace, "config/db.json", "{}", true, policy)
+	if !errors.Is(err, ErrPathReadOnly) {
+		t.Errorf("expected ErrPathReadOnly for config/db.json, got: %v", err)
+	}
+
+	// 3. Denied path write & read blocked
+	_, err = WriteFile(tempWorkspace, ".secrets", "classified", true, policy)
+	if !errors.Is(err, ErrPathDenied) {
+		t.Errorf("expected ErrPathDenied for writing .secrets, got: %v", err)
+	}
+	_ = os.WriteFile(filepath.Join(tempWorkspace, ".secrets"), []byte("classified"), 0644)
+	_, err = ReadFile(tempWorkspace, ".secrets", 1, 10, policy)
+	if !errors.Is(err, ErrPathDenied) {
+		t.Errorf("expected ErrPathDenied for reading .secrets, got: %v", err)
+	}
+
+	// 4. ListDir filters out denied path
+	listRes, err := ListDir(tempWorkspace, ".", false, 1, policy)
+	if err != nil {
+		t.Fatalf("ListDir failed: %v", err)
+	}
+	for _, entry := range listRes.Entries {
+		if entry.Name == ".secrets" {
+			t.Errorf("expected .secrets to be filtered out of directory listing")
+		}
+	}
+
+	// 5. Global ReadOnly blocks any write
+	roPolicy := &PathPolicy{ReadOnly: true}
+	_, err = WriteFile(tempWorkspace, "src/main.go", "new content", true, roPolicy)
+	if !errors.Is(err, ErrWorkspaceReadOnly) {
+		t.Errorf("expected ErrWorkspaceReadOnly, got: %v", err)
 	}
 }

@@ -36,6 +36,7 @@ type DockerSandboxConfig struct {
 	Persistent    bool              // If true, do not destroy container, worktree, and service mesh on Close()
 	MaxTokens     int64             // Cumulative token limit before tripping circuit breaker (0 = unlimited)
 	MaxDuration   time.Duration     // Cumulative execution wall-clock time limit (0 = unlimited)
+	PathPolicy    PathPolicy        // Fine-grained path access control and mount constraints
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -208,7 +209,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 			labels["vessel.persistent"] = "true"
 		}
 
-		id, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime, combinedEnv, labels)
+		id, err := createAndStartContainer(ctx, cli, cfg.ImageName, cfg.ContainerName, cfg.WorkspacePath, cfg.NetworkMode, cfg.MemoryBytes, cfg.CPUShares, cfg.Runtime, combinedEnv, labels, cfg.PathPolicy)
 		if err != nil {
 			return nil, err
 		}
@@ -279,7 +280,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 	}, nil
 }
 
-func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string, customEnv []string, labels map[string]string) (string, error) {
+func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, imageName, containerName, workspacePath, networkMode string, memBytes int64, cpus float64, runtime string, customEnv []string, labels map[string]string, policy PathPolicy) (string, error) {
 	if networkMode == "" {
 		networkMode = "bridge"
 	}
@@ -315,10 +316,51 @@ func createAndStartContainer(ctx context.Context, cli client.CommonAPIClient, im
 		fmt.Fprintln(os.Stderr, "[vessel] WARNING: --network host disables container network isolation! Sockets and localhost are shared with host.")
 	}
 
+	mountMode := "rw"
+	if policy.ReadOnly {
+		mountMode = "ro"
+	}
+
+	binds := []string{
+		fmt.Sprintf("%s:/workspace:%s", workspacePath, mountMode),
+	}
+
+	tmpfsMap := make(map[string]string)
+	if policy.ReadOnly {
+		tmpfsMap["/tmp"] = "rw,noexec,nosuid,size=64m"
+	}
+
+	// Layer read-only sub-binds for specific files/directories
+	for _, p := range policy.ROPaths {
+		norm := NormalizePolicyPath(p)
+		if norm == "" {
+			continue
+		}
+		hostPath := filepath.Join(workspacePath, filepath.FromSlash(norm))
+		if _, err := os.Stat(hostPath); err == nil {
+			binds = append(binds, fmt.Sprintf("%s:/workspace/%s:ro", hostPath, norm))
+		}
+	}
+
+	// Mask denied paths
+	for _, p := range policy.DenyPaths {
+		norm := NormalizePolicyPath(p)
+		if norm == "" {
+			continue
+		}
+		hostPath := filepath.Join(workspacePath, filepath.FromSlash(norm))
+		if fi, err := os.Stat(hostPath); err == nil {
+			if fi.IsDir() {
+				tmpfsMap[fmt.Sprintf("/workspace/%s", norm)] = "ro,size=0"
+			} else {
+				binds = append(binds, fmt.Sprintf("/dev/null:/workspace/%s:ro", norm))
+			}
+		}
+	}
+
 	hostCfg := &container.HostConfig{
-		Binds: []string{
-			fmt.Sprintf("%s:/workspace:rw", workspacePath),
-		},
+		Binds:       binds,
+		Tmpfs:       tmpfsMap,
 		NetworkMode: container.NetworkMode(networkMode),
 		Resources:   res,
 		CapDrop:     []string{"ALL"},
@@ -523,7 +565,7 @@ func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 		labels["vessel.persistent"] = "true"
 	}
 
-	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime, combinedEnv, labels)
+	newID, err := createAndStartContainer(ctx, d.cli, imageID, newContainerName, d.cfg.WorkspacePath, d.cfg.NetworkMode, d.cfg.MemoryBytes, d.cfg.CPUShares, d.cfg.Runtime, combinedEnv, labels, d.cfg.PathPolicy)
 	if err != nil {
 		return fmt.Errorf("failed to restore container from checkpoint %s: %w", tag, err)
 	}
@@ -832,4 +874,11 @@ func (d *DockerSandbox) Budget() BudgetSnapshot {
 		return budgetMgr.Snapshot()
 	}
 	return BudgetSnapshot{}
+}
+
+// Policy returns the active workspace path access control policy.
+func (d *DockerSandbox) Policy() *PathPolicy {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return &d.cfg.PathPolicy
 }

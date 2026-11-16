@@ -60,6 +60,9 @@ type Sandbox interface {
 	WorktreeStatus(ctx context.Context) (*WorktreeStatusResult, error)
 	WorktreeDiff(ctx context.Context, maxBytes int) (*WorktreeDiffResult, error)
 	WorktreeCommit(ctx context.Context, message, authorName, authorEmail string) (*WorktreeCommitResult, error)
+
+	// Policy returns the active workspace path access control policy.
+	Policy() *PathPolicy
 }
 
 // MockSandbox provides an in-memory test implementation of the Sandbox interface.
@@ -76,7 +79,11 @@ type MockSandbox struct {
 	persistent  bool
 	reconnected bool
 	budgetMgr   *BudgetMonitor
+	policy      *PathPolicy
 }
+
+func (m *MockSandbox) Policy() *PathPolicy { return m.policy }
+func (m *MockSandbox) SetPolicy(p *PathPolicy) { m.policy = p }
 
 func (m *MockSandbox) SessionID() string   { return m.sessionID }
 func (m *MockSandbox) IsPersistent() bool  { return m.persistent }

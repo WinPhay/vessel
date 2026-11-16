@@ -52,14 +52,25 @@ type GrepOptions struct {
 }
 
 // GrepWorkspace searches for a pattern across files within the workspace sandbox jail.
-func GrepWorkspace(workspaceRoot string, opts GrepOptions) (*GrepResult, error) {
+func GrepWorkspace(workspaceRoot string, opts GrepOptions, policy ...*PathPolicy) (*GrepResult, error) {
 	if strings.TrimSpace(opts.Pattern) == "" {
 		return nil, ErrPatternEmpty
+	}
+
+	var pol *PathPolicy
+	if len(policy) > 0 && policy[0] != nil {
+		pol = policy[0]
 	}
 
 	searchDir := "."
 	if opts.Path != "" {
 		searchDir = opts.Path
+	}
+
+	if pol != nil {
+		if err := pol.CheckRead(searchDir); err != nil {
+			return nil, err
+		}
 	}
 
 	resolvedDir, err := ResolveSecurePath(workspaceRoot, searchDir)
@@ -118,6 +129,12 @@ func GrepWorkspace(workspaceRoot string, opts GrepOptions) (*GrepResult, error) 
 			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "dist" || name == "bin" {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+
+		cleanRoot, _ := filepath.Abs(workspaceRoot)
+		relToRoot, _ := filepath.Rel(cleanRoot, path)
+		if pol != nil && pol.CheckRead(relToRoot) != nil {
 			return nil
 		}
 
