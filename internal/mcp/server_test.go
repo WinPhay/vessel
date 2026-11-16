@@ -349,8 +349,10 @@ func TestMCPServerServiceTools(t *testing.T) {
 	server := NewServer(mockSB, ".", &inBuf, &outBuf)
 	ctx := context.Background()
 
-	// 1. Spawn service
-	reqSpawn := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_spawn_service","arguments":{"name":"test-db","image":"postgres:15-alpine","env":{"POSTGRES_PASSWORD":"secretpassword"}}}}` + "\n"
+	// 1. Spawn service with port mappings
+	reqSpawn := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"test-db","image":"postgres:15-alpine","env":{"POSTGRES_PASSWORD":"secretpassword"},"ports":["5432:5432"]}}`
+	// Wait, the params argument is {"name":"vessel_spawn_service","arguments":{"name":"test-db","image":"postgres:15-alpine","env":{"POSTGRES_PASSWORD":"secretpassword"},"ports":["5432:5432"]}}
+	reqSpawn = `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_spawn_service","arguments":{"name":"test-db","image":"postgres:15-alpine","env":{"POSTGRES_PASSWORD":"secretpassword"},"ports":["5432:5432"]}}}` + "\n"
 	inBuf.WriteString(reqSpawn)
 	_ = server.Serve(ctx)
 
@@ -369,6 +371,26 @@ func TestMCPServerServiceTools(t *testing.T) {
 	_ = json.Unmarshal([]byte(textJSON), &svcInfo)
 	if svcInfo.Name != "test-db" || svcInfo.Hostname != "test-db" {
 		t.Errorf("unexpected service info: %+v", svcInfo)
+	}
+	if len(svcInfo.Ports) != 1 || !strings.Contains(svcInfo.Ports[0], "5432") {
+		t.Errorf("expected port mapping in service info, got: %+v", svcInfo.Ports)
+	}
+
+	// 1b. Reject insecure port mapping (0.0.0.0)
+	outBuf.Reset()
+	inBuf.Reset()
+	reqInsecure := `{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"vessel_spawn_service","arguments":{"name":"insecure-db","image":"postgres:15-alpine","ports":["0.0.0.0:5433:5432"]}}}` + "\n"
+	inBuf.WriteString(reqInsecure)
+	_ = server.Serve(ctx)
+
+	var respInsecure JSONRPCResponse
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respInsecure) != nil {
+		t.Fatalf("failed reading response: %v", err)
+	}
+	resInsecureMap := respInsecure.Result.(map[string]any)
+	if isErr, ok := resInsecureMap["isError"].(bool); !ok || !isErr {
+		t.Errorf("expected isError=true for insecure 0.0.0.0 port mapping")
 	}
 
 	// 2. List services

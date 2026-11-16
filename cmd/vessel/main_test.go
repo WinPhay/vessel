@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -241,5 +242,23 @@ func TestCLI_SessionSubcommand(t *testing.T) {
 	})
 	if !strings.Contains(stdout, "session") || !strings.Contains(stdout, "prune") {
 		t.Errorf("expected usage to mention session and prune, got: %s", stdout)
+	}
+}
+
+func TestCLI_ServicePortFlags(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	var servicePorts multiStringFlag
+	flags.Var(&servicePorts, "service-port", "Service port mapping")
+	flags.Var(&servicePorts, "port", "Alias for service-port")
+
+	args := []string{"--service-port", "5432:5432", "-port", "redis=6379:6379"}
+	if err := parseInterspersed(flags, args); err != nil {
+		t.Fatalf("failed to parse port flags: %v", err)
+	}
+	if len(servicePorts) != 2 {
+		t.Fatalf("expected 2 service ports parsed, got: %d", len(servicePorts))
+	}
+	if servicePorts[0] != "5432:5432" || servicePorts[1] != "redis=6379:6379" {
+		t.Errorf("unexpected service ports: %+v", servicePorts)
 	}
 }

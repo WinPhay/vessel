@@ -508,6 +508,13 @@ func (s *Server) getToolsList() []Tool {
 						"type":        "string",
 						"description": "Optional container command to execute.",
 					},
+					"ports": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+						"description": "Optional list of port mappings to expose to localhost (e.g. ['5432:5432', '8080:80']). Host binding is strictly locked to 127.0.0.1.",
+					},
 				},
 				"required": []string{"name", "image"},
 			},
@@ -981,6 +988,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			Image   string            `json:"image"`
 			Env     map[string]string `json:"env"`
 			Command string            `json:"command"`
+			Ports   []string          `json:"ports"`
 		}
 		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_spawn_service: %v", err))
@@ -989,7 +997,7 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			return s.toolErrorResponse(req.ID, "name and image parameters are required")
 		}
 
-		info, err := s.sb.SpawnService(ctx, args.Name, args.Image, args.Env, args.Command)
+		info, err := s.sb.SpawnService(ctx, args.Name, args.Image, args.Env, args.Command, args.Ports...)
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to spawn service: %v", err))
 		}

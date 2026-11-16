@@ -109,6 +109,9 @@ func runExec(args []string) {
 	execFlags.Var(&secrets, "secret", "Custom secret to inject and redact in form KEY=VALUE (repeatable)")
 	var services multiStringFlag
 	execFlags.Var(&services, "service", "Sidecar service to spawn on session network in form NAME=IMAGE (repeatable)")
+	var servicePorts multiStringFlag
+	execFlags.Var(&servicePorts, "service-port", "Host port mapping for services in form [NAME=]HOST:CONTAINER (e.g. 5432:5432 or db=5432:5432). Strictly bound to 127.0.0.1. (repeatable)")
+	execFlags.Var(&servicePorts, "port", "Alias for --service-port")
 	useWorktree := execFlags.Bool("worktree", false, "Isolate session in an ephemeral Git worktree")
 	maskSecrets := execFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	session := execFlags.String("session", "", "Named session ID for reconnect and persistence")
@@ -194,13 +197,31 @@ func runExec(args []string) {
 	}
 	defer sb.Close()
 
-	for _, s := range services {
+	svcPortsMap := make(map[string][]string)
+	for _, p := range servicePorts {
+		parts := strings.SplitN(p, "=", 2)
+		if len(parts) == 2 {
+			svcPortsMap[strings.TrimSpace(parts[0])] = append(svcPortsMap[strings.TrimSpace(parts[0])], strings.TrimSpace(parts[1]))
+		} else {
+			svcPortsMap["_default"] = append(svcPortsMap["_default"], strings.TrimSpace(parts[0]))
+		}
+	}
+
+	for i, s := range services {
 		parts := strings.SplitN(s, "=", 2)
 		if len(parts) == 2 {
 			svcName := strings.TrimSpace(parts[0])
 			svcImage := strings.TrimSpace(parts[1])
-			fmt.Printf("[vessel] Spawning sidecar service %s (%s)...\n", svcName, svcImage)
-			_, err := sb.SpawnService(ctx, svcName, svcImage, nil, "")
+			portsToPass := append([]string{}, svcPortsMap[svcName]...)
+			if len(portsToPass) == 0 && (i == 0 || len(services) == 1) {
+				portsToPass = append(portsToPass, svcPortsMap["_default"]...)
+			}
+			portDesc := ""
+			if len(portsToPass) > 0 {
+				portDesc = fmt.Sprintf(" with ports %v", portsToPass)
+			}
+			fmt.Printf("[vessel] Spawning sidecar service %s (%s)%s...\n", svcName, svcImage, portDesc)
+			_, err := sb.SpawnService(ctx, svcName, svcImage, nil, "", portsToPass...)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[vessel] Warning: failed to spawn sidecar %s: %v\n", svcName, err)
 			}
@@ -240,6 +261,9 @@ func runMCP(args []string) {
 	mcpFlags.Var(&secrets, "secret", "Custom secret to inject and redact in form KEY=VALUE (repeatable)")
 	var services multiStringFlag
 	mcpFlags.Var(&services, "service", "Sidecar service to spawn on session network in form NAME=IMAGE (repeatable)")
+	var servicePorts multiStringFlag
+	mcpFlags.Var(&servicePorts, "service-port", "Host port mapping for services in form [NAME=]HOST:CONTAINER (e.g. 5432:5432 or db=5432:5432). Strictly bound to 127.0.0.1. (repeatable)")
+	mcpFlags.Var(&servicePorts, "port", "Alias for --service-port")
 	useWorktree := mcpFlags.Bool("worktree", false, "Isolate session in an ephemeral Git worktree")
 	maskSecrets := mcpFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	session := mcpFlags.String("session", "", "Named session ID for reconnect and persistence")
@@ -323,13 +347,31 @@ func runMCP(args []string) {
 	}
 	defer sb.Close()
 
-	for _, s := range services {
+	svcPortsMap := make(map[string][]string)
+	for _, p := range servicePorts {
+		parts := strings.SplitN(p, "=", 2)
+		if len(parts) == 2 {
+			svcPortsMap[strings.TrimSpace(parts[0])] = append(svcPortsMap[strings.TrimSpace(parts[0])], strings.TrimSpace(parts[1]))
+		} else {
+			svcPortsMap["_default"] = append(svcPortsMap["_default"], strings.TrimSpace(parts[0]))
+		}
+	}
+
+	for i, s := range services {
 		parts := strings.SplitN(s, "=", 2)
 		if len(parts) == 2 {
 			svcName := strings.TrimSpace(parts[0])
 			svcImage := strings.TrimSpace(parts[1])
-			fmt.Printf("[vessel] Spawning sidecar service %s (%s)...\n", svcName, svcImage)
-			_, err := sb.SpawnService(ctx, svcName, svcImage, nil, "")
+			portsToPass := append([]string{}, svcPortsMap[svcName]...)
+			if len(portsToPass) == 0 && (i == 0 || len(services) == 1) {
+				portsToPass = append(portsToPass, svcPortsMap["_default"]...)
+			}
+			portDesc := ""
+			if len(portsToPass) > 0 {
+				portDesc = fmt.Sprintf(" with ports %v", portsToPass)
+			}
+			fmt.Printf("[vessel] Spawning sidecar service %s (%s)%s...\n", svcName, svcImage, portDesc)
+			_, err := sb.SpawnService(ctx, svcName, svcImage, nil, "", portsToPass...)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[vessel] Warning: failed to spawn sidecar %s: %v\n", svcName, err)
 			}

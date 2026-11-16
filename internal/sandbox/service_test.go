@@ -282,3 +282,80 @@ func TestServiceManager_Persistence(t *testing.T) {
 		t.Errorf("expected 1 persistent service 'cache', got: %d", len(svcs))
 	}
 }
+
+func TestParsePortSpecs(t *testing.T) {
+	// 1. Valid specs
+	validSpecs := []string{
+		"5432:5432",
+		"127.0.0.1:8080:80",
+		"localhost:3000:3000",
+		"6379",
+		"9000:9000/udp",
+	}
+	portSet, portMap, descs, err := ParsePortSpecs(validSpecs)
+	if err != nil {
+		t.Fatalf("unexpected error parsing valid specs: %v", err)
+	}
+	if len(portSet) != 5 || len(portMap) != 5 || len(descs) != 5 {
+		t.Errorf("expected 5 parsed specs, got set=%d map=%d descs=%d", len(portSet), len(portMap), len(descs))
+	}
+
+	// 2. Security Invariant: reject non-localhost bindings (0.0.0.0, external IPs)
+	insecureSpecs := []string{
+		"0.0.0.0:5432:5432",
+		"192.168.1.10:5432:5432",
+		"10.0.0.1:80:80",
+	}
+	for _, spec := range insecureSpecs {
+		_, _, _, err := ParsePortSpecs([]string{spec})
+		if err == nil {
+			t.Errorf("expected error for insecure binding %q, got nil", spec)
+		}
+		if !strings.Contains(err.Error(), "insecure port binding") {
+			t.Errorf("expected insecure port binding error message, got: %v", err)
+		}
+	}
+
+	// 3. Reject invalid port numbers
+	invalidSpecs := []string{
+		"70000:5432",
+		"5432:70000",
+		"0:5432",
+		"-10:5432",
+		"invalid:5432",
+		"5432:invalid",
+		"5432:5432/invalidproto",
+	}
+	for _, spec := range invalidSpecs {
+		_, _, _, err := ParsePortSpecs([]string{spec})
+		if err == nil {
+			t.Errorf("expected error for invalid spec %q, got nil", spec)
+		}
+	}
+}
+
+func TestServiceManager_PortMapping(t *testing.T) {
+	sm, err := NewServiceManager(nil, "", "port-mesh-session")
+	if err != nil {
+		t.Fatalf("failed to create ServiceManager: %v", err)
+	}
+	ctx := context.Background()
+
+	// Spawn service with valid port mappings
+	info, err := sm.SpawnService(ctx, "postgres", "postgres:16-alpine", nil, "", "5432:5432", "127.0.0.1:8080:80")
+	if err != nil {
+		t.Fatalf("failed to spawn service with ports: %v", err)
+	}
+	if len(info.Ports) != 2 {
+		t.Fatalf("expected 2 port mappings in ServiceInfo, got: %d", len(info.Ports))
+	}
+	if !strings.Contains(info.Ports[0], "5432") {
+		t.Errorf("expected port description to contain 5432, got: %s", info.Ports[0])
+	}
+
+	// Reject insecure port mapping on spawn
+	_, err = sm.SpawnService(ctx, "insecure-svc", "alpine", nil, "", "0.0.0.0:9000:9000")
+	if err == nil {
+		t.Fatalf("expected error when spawning service with 0.0.0.0 port mapping")
+	}
+}

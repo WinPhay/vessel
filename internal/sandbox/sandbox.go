@@ -48,7 +48,7 @@ type Sandbox interface {
 	ListProcesses(ctx context.Context) ([]*ProcessInfo, error)
 
 	// Service mesh management methods
-	SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error)
+	SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string, ports ...string) (*ServiceInfo, error)
 	StopService(ctx context.Context, name string) error
 	ListServices(ctx context.Context) ([]*ServiceInfo, error)
 
@@ -214,11 +214,11 @@ func (m *MockSandbox) SetWorktreeManager(wm *WorktreeManager) {
 	m.wtMgr = wm
 }
 
-func (m *MockSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error) {
+func (m *MockSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string, ports ...string) (*ServiceInfo, error) {
 	if m.closed {
 		return nil, ErrSandboxClosed
 	}
-	return m.svcMgr.SpawnService(ctx, name, image, env, cmd)
+	return m.svcMgr.SpawnService(ctx, name, image, env, cmd, ports...)
 }
 
 func (m *MockSandbox) StopService(ctx context.Context, name string) error {

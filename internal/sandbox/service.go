@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 var (
@@ -30,6 +32,7 @@ type ServiceInfo struct {
 	CreatedAt time.Time         `json:"created_at"`
 	Hostname  string            `json:"hostname"`
 	Env       map[string]string `json:"env,omitempty"`
+	Ports     []string          `json:"ports,omitempty"`
 }
 
 // ServiceManager coordinates the lifecycle of isolated sidecar containers and their shared network.
@@ -92,6 +95,16 @@ func NewServiceManager(cli client.CommonAPIClient, workspaceContainerID, session
 					}
 				}
 				if svcName != "" {
+					var ports []string
+					for _, p := range c.Ports {
+						if p.PublicPort > 0 {
+							ip := p.IP
+							if ip == "" {
+								ip = "127.0.0.1"
+							}
+							ports = append(ports, fmt.Sprintf("%s:%d->%d/%s", ip, p.PublicPort, p.PrivatePort, p.Type))
+						}
+					}
 					sm.services[svcName] = &ServiceInfo{
 						ID:        c.ID,
 						Name:      svcName,
@@ -99,6 +112,7 @@ func NewServiceManager(cli client.CommonAPIClient, workspaceContainerID, session
 						Status:    c.State,
 						CreatedAt: time.Unix(c.Created, 0),
 						Hostname:  svcName,
+						Ports:     ports,
 					}
 				}
 			}
@@ -166,8 +180,93 @@ func (sm *ServiceManager) IsPersistent() bool {
 	return sm.persistent
 }
 
-// SpawnService launches an isolated sidecar container on the session network.
-func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName string, env map[string]string, cmd string) (*ServiceInfo, error) {
+// ParsePortSpecs parses and validates port mapping specifications.
+// Enforces security invariant: host IP must be strictly 127.0.0.1 (localhost only).
+// Supported formats:
+//   - "5432:5432"          -> 127.0.0.1:5432 -> 5432/tcp
+//   - "5432:5432/udp"      -> 127.0.0.1:5432 -> 5432/udp
+//   - "127.0.0.1:5432:5432"-> 127.0.0.1:5432 -> 5432/tcp
+//   - "5432"               -> 127.0.0.1 (auto) -> 5432/tcp
+func ParsePortSpecs(specs []string) (nat.PortSet, nat.PortMap, []string, error) {
+	portSet := make(nat.PortSet)
+	portMap := make(nat.PortMap)
+	var descriptions []string
+
+	for _, spec := range specs {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+
+		parts := strings.Split(spec, ":")
+		var hostIP, hostPort, containerPortProto string
+
+		switch len(parts) {
+		case 1:
+			hostIP = "127.0.0.1"
+			hostPort = ""
+			containerPortProto = parts[0]
+		case 2:
+			hostIP = "127.0.0.1"
+			hostPort = parts[0]
+			containerPortProto = parts[1]
+		case 3:
+			hostIP = parts[0]
+			hostPort = parts[1]
+			containerPortProto = parts[2]
+		default:
+			return nil, nil, nil, fmt.Errorf("invalid port specification %q: expected [host_ip:][host_port:]container_port", spec)
+		}
+
+		// Security Invariant: Host IP must be strictly loopback (127.0.0.1 or localhost)
+		if hostIP != "127.0.0.1" && hostIP != "localhost" {
+			return nil, nil, nil, fmt.Errorf("insecure port binding in %q: host IP must be 127.0.0.1 (public host exposure forbidden)", spec)
+		}
+		hostIP = "127.0.0.1"
+
+		proto := "tcp"
+		cPortStr := containerPortProto
+		if slashIdx := strings.Index(containerPortProto, "/"); slashIdx != -1 {
+			cPortStr = containerPortProto[:slashIdx]
+			proto = strings.ToLower(containerPortProto[slashIdx+1:])
+			if proto != "tcp" && proto != "udp" {
+				return nil, nil, nil, fmt.Errorf("unsupported protocol %q in %q (only tcp and udp supported)", proto, spec)
+			}
+		}
+
+		cPortNum, err := strconv.Atoi(cPortStr)
+		if err != nil || cPortNum < 1 || cPortNum > 65535 {
+			return nil, nil, nil, fmt.Errorf("invalid container port %q in %q (must be 1-65535)", cPortStr, spec)
+		}
+
+		if hostPort != "" {
+			hPortNum, err := strconv.Atoi(hostPort)
+			if err != nil || hPortNum < 1 || hPortNum > 65535 {
+				return nil, nil, nil, fmt.Errorf("invalid host port %q in %q (must be 1-65535)", hostPort, spec)
+			}
+		}
+
+		natPort := nat.Port(fmt.Sprintf("%d/%s", cPortNum, proto))
+		portSet[natPort] = struct{}{}
+
+		binding := nat.PortBinding{
+			HostIP:   hostIP,
+			HostPort: hostPort,
+		}
+		portMap[natPort] = append(portMap[natPort], binding)
+
+		desc := fmt.Sprintf("%s:%s->%s", hostIP, hostPort, natPort)
+		if hostPort == "" {
+			desc = fmt.Sprintf("%s(auto)->%s", hostIP, natPort)
+		}
+		descriptions = append(descriptions, desc)
+	}
+
+	return portSet, portMap, descriptions, nil
+}
+
+// SpawnService launches an isolated sidecar container on the session network with optional localhost port mappings.
+func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName string, env map[string]string, cmd string, ports ...string) (*ServiceInfo, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -186,6 +285,11 @@ func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName stri
 
 	if imageName == "" {
 		return nil, fmt.Errorf("service image cannot be empty")
+	}
+
+	exposedPorts, portBindings, portDescriptions, err := ParsePortSpecs(ports)
+	if err != nil {
+		return nil, fmt.Errorf("invalid port specifications: %w", err)
 	}
 
 	// Register sensitive env vars into tokenfilter DLP vault
@@ -209,13 +313,14 @@ func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName stri
 			CreatedAt: time.Now(),
 			Hostname:  name,
 			Env:       env,
+			Ports:     portDescriptions,
 		}
 		sm.services[name] = info
 		return info, nil
 	}
 
 	// Ensure image is pulled
-	_, _, err := sm.cli.ImageInspectWithRaw(ctx, imageName)
+	_, _, err = sm.cli.ImageInspectWithRaw(ctx, imageName)
 	if err != nil {
 		reader, pullErr := sm.cli.ImagePull(ctx, imageName, image.PullOptions{})
 		if pullErr != nil {
@@ -227,9 +332,10 @@ func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName stri
 
 	containerName := fmt.Sprintf("vessel-svc-%s-%s", name, sm.sessionID)
 	containerCfg := &container.Config{
-		Image: imageName,
-		Env:   envList,
-		Tty:   false,
+		Image:        imageName,
+		Env:          envList,
+		Tty:          false,
+		ExposedPorts: exposedPorts,
 		Labels: map[string]string{
 			"vessel.managed":      "true",
 			"vessel.service":      "true",
@@ -241,12 +347,12 @@ func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName stri
 		containerCfg.Cmd = []string{"sh", "-c", cmd}
 	}
 
-	// Host-Isolation Invariant: Zero Host Port Exposure
-	// We explicitly set PortBindings to nil and CapDrop to ALL
+	// Security Invariant: Port bindings are strictly bound to localhost (127.0.0.1)
 	hostCfg := &container.HostConfig{
-		NetworkMode: container.NetworkMode(sm.networkName),
-		CapDrop:     []string{"ALL"},
-		SecurityOpt: []string{"no-new-privileges:true"},
+		NetworkMode:  container.NetworkMode(sm.networkName),
+		PortBindings: portBindings,
+		CapDrop:      []string{"ALL"},
+		SecurityOpt:  []string{"no-new-privileges:true"},
 		Resources: container.Resources{
 			Memory: 512 * 1024 * 1024, // 512 MB memory boundary for sidecars
 		},
@@ -278,9 +384,25 @@ func (sm *ServiceManager) SpawnService(ctx context.Context, name, imageName stri
 		CreatedAt: time.Now(),
 		Hostname:  name,
 		Env:       env,
+		Ports:     portDescriptions,
 	}
-	sm.services[name] = info
 
+	if len(portBindings) > 0 {
+		inspect, err := sm.cli.ContainerInspect(ctx, resp.ID)
+		if err == nil && inspect.NetworkSettings != nil && len(inspect.NetworkSettings.Ports) > 0 {
+			var actualPorts []string
+			for port, bindings := range inspect.NetworkSettings.Ports {
+				for _, b := range bindings {
+					actualPorts = append(actualPorts, fmt.Sprintf("%s:%s->%s", b.HostIP, b.HostPort, port))
+				}
+			}
+			if len(actualPorts) > 0 {
+				info.Ports = actualPorts
+			}
+		}
+	}
+
+	sm.services[name] = info
 	return info, nil
 }
 

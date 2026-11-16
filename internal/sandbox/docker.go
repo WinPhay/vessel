@@ -626,14 +626,14 @@ func (d *DockerSandbox) WorktreeCommit(ctx context.Context, message, authorName,
 }
 
 // SpawnService launches an isolated sidecar container on the session network.
-func (d *DockerSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string) (*ServiceInfo, error) {
+func (d *DockerSandbox) SpawnService(ctx context.Context, name, image string, env map[string]string, cmd string, ports ...string) (*ServiceInfo, error) {
 	d.mu.RLock()
 	closed := d.closed
 	d.mu.RUnlock()
 	if closed {
 		return nil, ErrSandboxClosed
 	}
-	return d.svcMgr.SpawnService(ctx, name, image, env, cmd)
+	return d.svcMgr.SpawnService(ctx, name, image, env, cmd, ports...)
 }
 
 // StopService terminates and removes a sidecar container by name.
