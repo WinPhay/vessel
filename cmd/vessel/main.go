@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -47,6 +48,8 @@ func main() {
 		runService(os.Args[2:])
 	case "worktree":
 		runWorktree(os.Args[2:])
+	case "session":
+		runSession(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -741,6 +744,145 @@ func runWorktree(args []string) {
 	}
 }
 
+func runSession(args []string) {
+	sessionFlags := flag.NewFlagSet("session", flag.ExitOnError)
+	workspace := sessionFlags.String("workspace", "", "Filter sessions by workspace path")
+	jsonOutput := sessionFlags.Bool("json", false, "Emit structured JSON output")
+	allFlag := sessionFlags.Bool("all", false, "Operate on all sessions including running ones (prune)")
+	_ = parseInterspersed(sessionFlags, args)
+
+	remaining := sessionFlags.Args()
+	if len(remaining) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: session subcommand required (list, inspect, stop, prune)")
+		fmt.Fprintln(os.Stderr, "Usage: vessel session <list | inspect <id> | stop <id> | prune [--all] [--workspace <dir>]>")
+		os.Exit(1)
+	}
+
+	action := remaining[0]
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[vessel] Error connecting to Docker: %v\n", err)
+		os.Exit(1)
+	}
+	defer cli.Close()
+
+	switch action {
+	case "list":
+		sessions, err := sandbox.ListSessions(ctx, cli)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Failed to list sessions: %v\n", err)
+			os.Exit(1)
+		}
+
+		if *workspace != "" {
+			absFilter, _ := filepath.Abs(*workspace)
+			filtered := make([]*sandbox.SessionSummary, 0)
+			for _, s := range sessions {
+				if s.Workspace == absFilter || s.Workspace == *workspace {
+					filtered = append(filtered, s)
+				}
+			}
+			sessions = filtered
+		}
+
+		if *jsonOutput {
+			payload, _ := json.MarshalIndent(sessions, "", "  ")
+			fmt.Println(string(payload))
+			return
+		}
+
+		if len(sessions) == 0 {
+			fmt.Println("[vessel] No active or persistent sessions found.")
+			return
+		}
+
+		fmt.Printf("%-24s %-10s %-14s %-20s %-12s %s\n", "SESSION ID", "STATUS", "CONTAINER", "IMAGE", "PERSISTENT", "SIDECARS")
+		fmt.Println(strings.Repeat("─", 90))
+		for _, s := range sessions {
+			sidecarsStr := "-"
+			if len(s.Sidecars) > 0 {
+				sidecarsStr = strings.Join(s.Sidecars, ", ")
+			}
+			persistStr := "no"
+			if s.Persistent {
+				persistStr = "yes"
+			}
+			fmt.Printf("%-24s %-10s %-14s %-20s %-12s %s\n", s.SessionID, s.Status, s.ContainerID, s.Image, persistStr, sidecarsStr)
+		}
+
+	case "inspect":
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: inspect requires a session ID")
+			fmt.Fprintln(os.Stderr, "Usage: vessel session inspect <session_id>")
+			os.Exit(1)
+		}
+		targetID := remaining[1]
+		detail, err := sandbox.InspectSession(ctx, cli, targetID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Inspect error: %v\n", err)
+			os.Exit(1)
+		}
+		payload, _ := json.MarshalIndent(detail, "", "  ")
+		fmt.Println(string(payload))
+
+	case "stop":
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: stop requires a session ID")
+			fmt.Fprintln(os.Stderr, "Usage: vessel session stop <session_id>")
+			os.Exit(1)
+		}
+		targetID := remaining[1]
+		if err := sandbox.StopSession(ctx, cli, targetID); err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Failed to stop session %s: %v\n", targetID, err)
+			os.Exit(1)
+		}
+		fmt.Printf("[vessel] Session %q stopped successfully.\n", targetID)
+
+	case "prune":
+		workspaceFilter := ""
+		if *workspace != "" {
+			workspaceFilter, _ = filepath.Abs(*workspace)
+		}
+		res, err := sandbox.PruneSessions(ctx, cli, *allFlag, workspaceFilter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Prune error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if *jsonOutput {
+			payload, _ := json.MarshalIndent(res, "", "  ")
+			fmt.Println(string(payload))
+			return
+		}
+
+		total := len(res.ContainersDeleted) + len(res.NetworksDeleted) + len(res.WorktreesPruned)
+		if total == 0 {
+			fmt.Println("[vessel] No dormant sessions, networks, or worktrees found to prune.")
+			return
+		}
+
+		fmt.Printf("[vessel] Pruned %d container(s), %d network(s), %d worktree(s):\n",
+			len(res.ContainersDeleted), len(res.NetworksDeleted), len(res.WorktreesPruned))
+		for _, c := range res.ContainersDeleted {
+			fmt.Printf("  • Container: %s\n", c)
+		}
+		for _, n := range res.NetworksDeleted {
+			fmt.Printf("  • Network:   %s\n", n)
+		}
+		for _, w := range res.WorktreesPruned {
+			fmt.Printf("  • Worktree:  %s\n", w)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown session action: %s\n", action)
+		fmt.Fprintln(os.Stderr, "Usage: vessel session <list | inspect <id> | stop <id> | prune [--all] [--workspace <dir>]>")
+		os.Exit(1)
+	}
+}
+
 func printUsage() {
 	fmt.Printf("Vessel v%s — Local AI Agent Sandbox Engine\n\n", strings.TrimPrefix(Version, "v"))
 	fmt.Println("Usage:")
@@ -751,6 +893,8 @@ func printUsage() {
 	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --service <NAME=IMG>, --worktree, --mask-secrets")
 	fmt.Println("  mcp         Start stdio Model Context Protocol server")
 	fmt.Println("              Flags: --workspace <dir>, --image <image/alias>, --network <mode>, --memory <limit>, --cpus <cores>, --runtime <runtime>, --secret <KEY=VAL>, --service <NAME=IMG>, --worktree, --mask-secrets, --mock")
+	fmt.Println("  session     Inspect and prune persistent sessions and sidecars")
+	fmt.Println("              Usage: vessel session [list | inspect <id> | stop <id> | prune [--all] [--workspace <dir>]]")
 	fmt.Println("  worktree    Inspect ephemeral Git worktrees and diffs")
 	fmt.Println("              Usage: vessel worktree [status | diff] [--workspace <dir>]")
 	fmt.Println("  service     Manage ephemeral sidecar containers")

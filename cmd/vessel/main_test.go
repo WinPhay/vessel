@@ -53,7 +53,7 @@ func TestCLI_PrintUsage(t *testing.T) {
 	if !strings.Contains(stdout, "Vessel v") {
 		t.Errorf("expected usage to mention Vessel v, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "checkpoint") || !strings.Contains(stdout, "rollback") || !strings.Contains(stdout, "status") || !strings.Contains(stdout, "process") {
+	if !strings.Contains(stdout, "checkpoint") || !strings.Contains(stdout, "rollback") || !strings.Contains(stdout, "status") || !strings.Contains(stdout, "process") || !strings.Contains(stdout, "session") {
 		t.Errorf("usage missing new subcommands: %s", stdout)
 	}
 	if !strings.Contains(stdout, "runsc") || !strings.Contains(stdout, "OCI Runtimes") {
@@ -232,5 +232,14 @@ func TestCLI_WorktreeSubcommand(t *testing.T) {
 	})
 	if !strings.Contains(stdout, "not inside a Git repository") {
 		t.Errorf("expected not inside git repo message, got: %s", stdout)
+	}
+}
+
+func TestCLI_SessionSubcommand(t *testing.T) {
+	stdout, _ := captureOutput(func() {
+		printUsage()
+	})
+	if !strings.Contains(stdout, "session") || !strings.Contains(stdout, "prune") {
+		t.Errorf("expected usage to mention session and prune, got: %s", stdout)
 	}
 }
