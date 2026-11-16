@@ -458,6 +458,23 @@ func (d *DockerSandbox) Checkpoint(ctx context.Context, tag string) error {
 	return nil
 }
 
+// CheckpointDiff computes the file changes and unified diff between two checkpoints or a checkpoint and the live workspace.
+func (d *DockerSandbox) CheckpointDiff(ctx context.Context, tagA, tagB string, maxBytes int) (*CheckpointDiffResult, error) {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return nil, ErrSandboxClosed
+	}
+	snapMgr := d.snapshotMgr
+	d.mu.RUnlock()
+
+	if snapMgr == nil {
+		return nil, fmt.Errorf("snapshot manager is not initialized")
+	}
+
+	return snapMgr.DiffSnapshot(tagA, tagB, maxBytes)
+}
+
 // Rollback restores the container to the snapshot associated with the tag and restores the workspace directory.
 func (d *DockerSandbox) Rollback(ctx context.Context, tag string) error {
 	d.mu.Lock()

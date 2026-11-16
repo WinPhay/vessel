@@ -206,6 +206,28 @@ func (s *Server) getToolsList() []Tool {
 			},
 		},
 		{
+			Name:        "vessel_checkpoint_diff",
+			Description: "Compares file changes, additions, deletions, and unified diff between two checkpoints or a checkpoint and the live workspace without rolling back.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tag_a": map[string]any{
+						"type":        "string",
+						"description": "First checkpoint tag to compare.",
+					},
+					"tag_b": map[string]any{
+						"type":        "string",
+						"description": "Optional second checkpoint tag. If omitted or 'live', compares against the active workspace directory.",
+					},
+					"max_bytes": map[string]any{
+						"type":        "integer",
+						"description": "Maximum bytes of unified diff to return (default: unlimited).",
+					},
+				},
+				"required": []string{"tag_a"},
+			},
+		},
+		{
 			Name:        "vessel_rollback",
 			Description: "Restores the container filesystem state to a previously saved checkpoint tag.",
 			InputSchema: map[string]any{
@@ -671,6 +693,34 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("checkpoint failed: %v", err))
 		}
 		return s.toolSuccessResponse(req.ID, fmt.Sprintf("Checkpoint '%s' created successfully.", args.Tag))
+
+	case "vessel_checkpoint_diff":
+		var args struct {
+			TagA     string `json:"tag_a"`
+			TagB     string `json:"tag_b"`
+			MaxBytes int    `json:"max_bytes"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil || args.TagA == "" {
+			return s.toolErrorResponse(req.ID, "tag_a parameter is required for vessel_checkpoint_diff")
+		}
+		if err := sandbox.ValidateCheckpointTag(args.TagA); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid tag_a: %v", err))
+		}
+		if args.TagB != "" && args.TagB != "live" {
+			if err := sandbox.ValidateCheckpointTag(args.TagB); err != nil {
+				return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid tag_b: %v", err))
+			}
+		}
+
+		res, err := s.sb.CheckpointDiff(ctx, args.TagA, args.TagB, args.MaxBytes)
+		if err != nil {
+			if errors.Is(err, sandbox.ErrCheckpointNotFound) {
+				return s.toolErrorResponse(req.ID, "one or more specified checkpoints do not exist")
+			}
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("checkpoint diff failed: %v", err))
+		}
+		payload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(payload))
 
 	case "vessel_rollback":
 		var args struct {

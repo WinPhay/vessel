@@ -75,6 +75,9 @@ func (v *Vault) Register(key, value string) {
 	if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
 		return
 	}
+	if len(strings.TrimSpace(value)) < 4 {
+		return
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.secrets[value] = key

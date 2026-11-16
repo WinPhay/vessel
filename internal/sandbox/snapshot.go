@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -10,8 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
+
+	"github.com/WinPhay/vessel/internal/tokenfilter"
 )
 
 var (
@@ -342,4 +346,308 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return nil
+}
+
+// CheckpointFileDiff records changes to an individual file between checkpoints.
+type CheckpointFileDiff struct {
+	Path   string `json:"path"`
+	Status string `json:"status"` // "added", "modified", "deleted"
+}
+
+// CheckpointDiffResult contains the overall delta and unified diff between checkpoints.
+type CheckpointDiffResult struct {
+	TagA          string               `json:"tag_a"`
+	TagB          string               `json:"tag_b"`
+	FilesChanged  int                  `json:"files_changed"`
+	Additions     int                  `json:"additions"`
+	Deletions     int                  `json:"deletions"`
+	Files         []CheckpointFileDiff `json:"files"`
+	Diff          string               `json:"diff"`
+	TokenEstimate int                  `json:"token_estimate"`
+	Truncated     bool                 `json:"truncated"`
+}
+
+func isBinary(data []byte) bool {
+	limit := len(data)
+	if limit > 8000 {
+		limit = 8000
+	}
+	for i := 0; i < limit; i++ {
+		if data[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	lines := strings.Split(s, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func computeLCS(a, b []string) [][]int {
+	n := len(a)
+	m := len(b)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if a[i-1] == b[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				if dp[i-1][j] >= dp[i][j-1] {
+					dp[i][j] = dp[i-1][j]
+				} else {
+					dp[i][j] = dp[i][j-1]
+				}
+			}
+		}
+	}
+	return dp
+}
+
+type diffOp struct {
+	op   rune
+	line string
+}
+
+func generateUnifiedDiff(filePath string, oldData, newData []byte) (string, int, int) {
+	if bytes.Equal(oldData, newData) {
+		return "", 0, 0
+	}
+
+	if isBinary(oldData) || isBinary(newData) {
+		return fmt.Sprintf("Binary files a/%s and b/%s differ\n", filePath, filePath), 0, 0
+	}
+
+	oldLines := splitLines(string(oldData))
+	newLines := splitLines(string(newData))
+
+	if len(oldLines) == 0 {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("--- /dev/null\n+++ b/%s\n", filePath))
+		sb.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(newLines)))
+		for _, l := range newLines {
+			sb.WriteString("+" + l + "\n")
+		}
+		return sb.String(), len(newLines), 0
+	}
+
+	if len(newLines) == 0 {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("--- a/%s\n+++ /dev/null\n", filePath))
+		sb.WriteString(fmt.Sprintf("@@ -1,%d +0,0 @@\n", len(oldLines)))
+		for _, l := range oldLines {
+			sb.WriteString("-" + l + "\n")
+		}
+		return sb.String(), 0, len(oldLines)
+	}
+
+	dp := computeLCS(oldLines, newLines)
+	var ops []diffOp
+	i, j := len(oldLines), len(newLines)
+	for i > 0 || j > 0 {
+		if i > 0 && j > 0 && oldLines[i-1] == newLines[j-1] {
+			ops = append(ops, diffOp{op: ' ', line: oldLines[i-1]})
+			i--
+			j--
+		} else if j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
+			ops = append(ops, diffOp{op: '+', line: newLines[j-1]})
+			j--
+		} else if i > 0 && (j == 0 || dp[i][j-1] < dp[i-1][j]) {
+			ops = append(ops, diffOp{op: '-', line: oldLines[i-1]})
+			i--
+		}
+	}
+	for l, r := 0, len(ops)-1; l < r; l, r = l+1, r-1 {
+		ops[l], ops[r] = ops[r], ops[l]
+	}
+
+	additions := 0
+	deletions := 0
+	for _, op := range ops {
+		if op.op == '+' {
+			additions++
+		} else if op.op == '-' {
+			deletions++
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("--- a/%s\n+++ b/%s\n", filePath, filePath))
+	sb.WriteString(fmt.Sprintf("@@ -1,%d +1,%d @@\n", len(oldLines), len(newLines)))
+	for _, op := range ops {
+		sb.WriteRune(op.op)
+		sb.WriteString(op.line)
+		sb.WriteByte('\n')
+	}
+
+	return sb.String(), additions, deletions
+}
+
+// scanFiles scans a directory recursively and returns all non-ignored relative file paths.
+func (sm *SnapshotManager) scanFiles(baseDir string) (map[string]os.FileInfo, error) {
+	files := make(map[string]os.FileInfo)
+	err := filepath.Walk(baseDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(baseDir, p)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		if sm.isIgnored(rel) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.IsDir() {
+			files[filepath.ToSlash(rel)] = info
+		}
+		return nil
+	})
+	return files, err
+}
+
+// DiffSnapshot compares two snapshots or compares a snapshot against the current live workspace.
+func (sm *SnapshotManager) DiffSnapshot(tagA, tagB string, maxBytes int) (*CheckpointDiffResult, error) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if err := ValidateCheckpointTag(tagA); err != nil {
+		return nil, fmt.Errorf("invalid tagA: %w", err)
+	}
+
+	dirA := filepath.Join(sm.snapshotBaseDir, tagA)
+	if _, err := os.Stat(dirA); os.IsNotExist(err) {
+		return nil, ErrCheckpointNotFound
+	}
+
+	tagBName := tagB
+	var dirB string
+	if tagB == "" || tagB == "live" || tagB == "current" {
+		tagBName = "live"
+		dirB = sm.workspacePath
+	} else {
+		if err := ValidateCheckpointTag(tagB); err != nil {
+			return nil, fmt.Errorf("invalid tagB: %w", err)
+		}
+		dirB = filepath.Join(sm.snapshotBaseDir, tagB)
+		if _, err := os.Stat(dirB); os.IsNotExist(err) {
+			return nil, ErrCheckpointNotFound
+		}
+	}
+
+	filesA, err := sm.scanFiles(dirA)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan files for tagA %s: %w", tagA, err)
+	}
+
+	filesB, err := sm.scanFiles(dirB)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan files for tagB %s: %w", tagBName, err)
+	}
+
+	allPathsMap := make(map[string]bool)
+	for p := range filesA {
+		allPathsMap[p] = true
+	}
+	for p := range filesB {
+		allPathsMap[p] = true
+	}
+
+	var allPaths []string
+	for p := range allPathsMap {
+		allPaths = append(allPaths, p)
+	}
+	sort.Strings(allPaths)
+
+	var (
+		fileDiffs   []CheckpointFileDiff
+		diffBuilder strings.Builder
+		additions   int
+		deletions   int
+	)
+
+	for _, relPath := range allPaths {
+		_, inA := filesA[relPath]
+		_, inB := filesB[relPath]
+
+		pathA := filepath.Join(dirA, filepath.FromSlash(relPath))
+		pathB := filepath.Join(dirB, filepath.FromSlash(relPath))
+
+		if !inA && inB {
+			// Added in B
+			dataB, err := os.ReadFile(pathB)
+			if err != nil {
+				continue
+			}
+			fileDiff, adds, dels := generateUnifiedDiff(relPath, nil, dataB)
+			diffBuilder.WriteString(fileDiff)
+			additions += adds
+			deletions += dels
+			fileDiffs = append(fileDiffs, CheckpointFileDiff{Path: relPath, Status: "added"})
+		} else if inA && !inB {
+			// Deleted in B
+			dataA, err := os.ReadFile(pathA)
+			if err != nil {
+				continue
+			}
+			fileDiff, adds, dels := generateUnifiedDiff(relPath, dataA, nil)
+			diffBuilder.WriteString(fileDiff)
+			additions += adds
+			deletions += dels
+			fileDiffs = append(fileDiffs, CheckpointFileDiff{Path: relPath, Status: "deleted"})
+		} else {
+			// In both: check if modified
+			dataA, err := os.ReadFile(pathA)
+			if err != nil {
+				continue
+			}
+			dataB, err := os.ReadFile(pathB)
+			if err != nil {
+				continue
+			}
+			if bytes.Equal(dataA, dataB) {
+				continue
+			}
+			fileDiff, adds, dels := generateUnifiedDiff(relPath, dataA, dataB)
+			diffBuilder.WriteString(fileDiff)
+			additions += adds
+			deletions += dels
+			fileDiffs = append(fileDiffs, CheckpointFileDiff{Path: relPath, Status: "modified"})
+		}
+	}
+
+	rawDiff := diffBuilder.String()
+	cleaned := tokenfilter.CleanOutput(rawDiff)
+	truncated := false
+	if maxBytes > 0 && len(cleaned) > maxBytes {
+		cleaned, truncated = tokenfilter.TruncateOutput(cleaned, maxBytes)
+	}
+
+	return &CheckpointDiffResult{
+		TagA:          tagA,
+		TagB:          tagBName,
+		FilesChanged:  len(fileDiffs),
+		Additions:     additions,
+		Deletions:     deletions,
+		Files:         fileDiffs,
+		Diff:          cleaned,
+		TokenEstimate: tokenfilter.EstimateTokens(cleaned),
+		Truncated:     truncated,
+	}, nil
 }

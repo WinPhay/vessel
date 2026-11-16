@@ -262,3 +262,62 @@ func TestCLI_ServicePortFlags(t *testing.T) {
 		t.Errorf("unexpected service ports: %+v", servicePorts)
 	}
 }
+
+func TestCLI_CheckpointDiff(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "vessel-cli-diff-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	testFile := filepath.Join(tempDir, "file.txt")
+	if err := os.WriteFile(testFile, []byte("version 1"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 1. Create checkpoint v1
+	stdout, _ := captureOutput(func() {
+		runCheckpoint([]string{"--workspace", tempDir, "v1"})
+	})
+	if !strings.Contains(stdout, "created successfully") {
+		t.Errorf("unexpected checkpoint output: %s", stdout)
+	}
+
+	// 2. Mutate file.txt and create file2.txt
+	if err := os.WriteFile(testFile, []byte("version 2\nextra line"), 0644); err != nil {
+		t.Fatalf("failed to update test file: %v", err)
+	}
+	file2 := filepath.Join(tempDir, "file2.txt")
+	if err := os.WriteFile(file2, []byte("new file"), 0644); err != nil {
+		t.Fatalf("failed to write file2: %v", err)
+	}
+
+	// 3. Diff v1 vs live
+	stdout, _ = captureOutput(func() {
+		runCheckpoint([]string{"--workspace", tempDir, "diff", "v1"})
+	})
+	if !strings.Contains(stdout, "Checkpoint Diff: v1 -> live") {
+		t.Errorf("expected diff v1->live in output, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "Files Changed: 2") {
+		t.Errorf("expected Files Changed: 2, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "[modified] file.txt") {
+		t.Errorf("expected [modified] file.txt, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "[added] file2.txt") {
+		t.Errorf("expected [added] file2.txt, got:\n%s", stdout)
+	}
+
+	// 4. Create checkpoint v2 and diff v1 vs v2
+	_, _ = captureOutput(func() {
+		runCheckpoint([]string{"--workspace", tempDir, "v2"})
+	})
+
+	stdout, _ = captureOutput(func() {
+		runCheckpoint([]string{"--workspace", tempDir, "diff", "v1", "v2"})
+	})
+	if !strings.Contains(stdout, "Checkpoint Diff: v1 -> v2") {
+		t.Errorf("expected diff v1->v2 in output, got:\n%s", stdout)
+	}
+}

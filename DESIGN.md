@@ -40,12 +40,13 @@ Host Environment (Developer Workstation)
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 23 core tools over the Model Context Protocol:
+Vessel exposes 24 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
 | `vessel_exec` | `command: string`, `timeout_seconds?: int` | Executes command inside container; returns exit code, stdout, stderr, and token estimate. |
 | `vessel_checkpoint` | `tag: string` | Creates a named checkpoint of container rootfs and workspace directory state. |
+| `vessel_checkpoint_diff` | `tag_a: string`, `tag_b?: string`, `max_bytes?: int` | Computes unified diff and file delta summary between checkpoints or live workspace with token estimation. |
 | `vessel_rollback` | `tag: string` | Restores container rootfs and workspace directory to the specified checkpoint state. |
 | `vessel_status` | *(none)* | Returns container health, uptime, workspace path, and active checkpoint list. |
 | `vessel_read_file` | `path: string`, `start_line?: int`, `end_line?: int` | Reads workspace file with optional line pagination, token count, and jail boundary verification. |

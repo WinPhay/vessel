@@ -413,6 +413,39 @@ func runCheckpoint(args []string) {
 		return
 	}
 
+	if remaining[0] == "diff" {
+		if len(remaining) < 2 {
+			fmt.Fprintln(os.Stderr, "Error: checkpoint diff requires at least one tag")
+			fmt.Fprintln(os.Stderr, "Usage: vessel checkpoint diff <tagA> [<tagB>] [--workspace <dir>]")
+			os.Exit(1)
+		}
+		tagA := remaining[1]
+		tagB := "live"
+		if len(remaining) >= 3 {
+			tagB = remaining[2]
+		}
+		res, err := sm.DiffSnapshot(tagA, tagB, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[vessel] Error diffing checkpoints: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("[vessel] Checkpoint Diff: %s -> %s\n", res.TagA, res.TagB)
+		fmt.Printf("Files Changed: %d | Additions: +%d | Deletions: -%d | Estimated Tokens: %d\n\n",
+			res.FilesChanged, res.Additions, res.Deletions, res.TokenEstimate)
+		if len(res.Files) > 0 {
+			for _, f := range res.Files {
+				fmt.Printf("  • [%s] %s\n", f.Status, f.Path)
+			}
+			fmt.Println()
+		}
+		if res.Diff != "" {
+			fmt.Println(res.Diff)
+		} else {
+			fmt.Println("[vessel] No differences detected.")
+		}
+		return
+	}
+
 	tag := remaining[0]
 	if tag == "create" {
 		if len(remaining) < 2 {
@@ -969,8 +1002,8 @@ func printUsage() {
 	fmt.Println("              Usage: vessel service [list | stop <name>]")
 	fmt.Println("  process     Manage background container processes")
 	fmt.Println("              Usage: vessel process [list | kill <id> | logs <id>] [--workspace <dir>]")
-	fmt.Println("  checkpoint  Create or list filesystem checkpoints")
-	fmt.Println("              Usage: vessel checkpoint [create <tag> | list | <tag>] [--workspace <dir>]")
+	fmt.Println("  checkpoint  Create, list, or diff filesystem checkpoints")
+	fmt.Println("              Usage: vessel checkpoint [create <tag> | list | diff <tagA> [<tagB>] | <tag>] [--workspace <dir>]")
 	fmt.Println("  rollback    Restore workspace to a named checkpoint")
 	fmt.Println("              Usage: vessel rollback <tag> [--workspace <dir>]")
 	fmt.Println("  status      Display sandbox engine health and active snapshots")

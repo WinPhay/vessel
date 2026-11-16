@@ -154,7 +154,7 @@ func TestServiceMesh_PersonaQA(t *testing.T) {
 			image string
 			env   map[string]string
 		}{
-			{"postgres", "postgres:15-alpine", map[string]string{"POSTGRES_PASSWORD": "dev"}},
+			{"postgres", "postgres:15-alpine", map[string]string{"POSTGRES_PASSWORD": "devpassword"}},
 			{"redis", "redis:7-alpine", nil},
 			{"rabbitmq", "rabbitmq:3-alpine", map[string]string{"RABBITMQ_DEFAULT_PASS": "guest"}},
 		}

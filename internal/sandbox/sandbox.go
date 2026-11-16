@@ -34,6 +34,9 @@ type Sandbox interface {
 	// Checkpoint snapshots the filesystem state under the given tag.
 	Checkpoint(ctx context.Context, tag string) error
 
+	// CheckpointDiff compares two checkpoints or a checkpoint against the live workspace.
+	CheckpointDiff(ctx context.Context, tagA, tagB string, maxBytes int) (*CheckpointDiffResult, error)
+
 	// Rollback restores the filesystem state to the specified tag.
 	Rollback(ctx context.Context, tag string) error
 
@@ -132,6 +135,31 @@ func (m *MockSandbox) Checkpoint(ctx context.Context, tag string) error {
 	}
 	m.checkpoints[tag] = true
 	return nil
+}
+
+func (m *MockSandbox) CheckpointDiff(ctx context.Context, tagA, tagB string, maxBytes int) (*CheckpointDiffResult, error) {
+	if m.closed {
+		return nil, ErrSandboxClosed
+	}
+	if !m.checkpoints[tagA] {
+		return nil, ErrCheckpointNotFound
+	}
+	tagBName := tagB
+	if tagB == "" || tagB == "live" {
+		tagBName = "live"
+	} else if !m.checkpoints[tagB] {
+		return nil, ErrCheckpointNotFound
+	}
+	return &CheckpointDiffResult{
+		TagA:          tagA,
+		TagB:          tagBName,
+		FilesChanged:  0,
+		Additions:     0,
+		Deletions:     0,
+		Files:         []CheckpointFileDiff{},
+		Diff:          "",
+		TokenEstimate: 0,
+	}, nil
 }
 
 func (m *MockSandbox) Rollback(ctx context.Context, tag string) error {

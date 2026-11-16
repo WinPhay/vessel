@@ -80,8 +80,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 23 {
-		t.Errorf("expected 23 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 24 {
+		t.Errorf("expected 24 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -601,5 +601,70 @@ func TestServer_BudgetReporting(t *testing.T) {
 	}
 	if !strings.Contains(text, `"cumulative_tokens": 1500`) {
 		t.Errorf("expected cumulative_tokens: 1500 in status output, got: %s", text)
+	}
+}
+
+func TestMCPServerCheckpointDiff(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	ctx := context.Background()
+	_ = mockSB.Checkpoint(ctx, "v1")
+
+	var inBuf, outBuf bytes.Buffer
+	server := NewServer(mockSB, ".", &inBuf, &outBuf)
+
+	// 1. Success diff v1 -> live
+	reqDiff := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vessel_checkpoint_diff","arguments":{"tag_a":"v1","tag_b":"live"}}}` + "\n"
+	inBuf.WriteString(reqDiff)
+	_ = server.Serve(ctx)
+
+	var resp JSONRPCResponse
+	line, err := outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &resp) != nil || resp.Error != nil {
+		t.Fatalf("vessel_checkpoint_diff failed: line=%s, err=%v", line, resp.Error)
+	}
+
+	resultMap := resp.Result.(map[string]any)
+	contentList := resultMap["content"].([]any)
+	firstContent := contentList[0].(map[string]any)
+	textJSON := firstContent["text"].(string)
+
+	var diffResult sandbox.CheckpointDiffResult
+	if err := json.Unmarshal([]byte(textJSON), &diffResult); err != nil {
+		t.Fatalf("failed to unmarshal diff result: %v", err)
+	}
+	if diffResult.TagA != "v1" || diffResult.TagB != "live" {
+		t.Errorf("expected v1->live, got %s->%s", diffResult.TagA, diffResult.TagB)
+	}
+
+	// 2. Non-existent tag error
+	outBuf.Reset()
+	inBuf.Reset()
+	reqErr := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vessel_checkpoint_diff","arguments":{"tag_a":"nonexistent"}}}` + "\n"
+	inBuf.WriteString(reqErr)
+	_ = server.Serve(ctx)
+
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &resp) != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	resMap, ok := resp.Result.(map[string]any)
+	if !ok || resMap["isError"] != true {
+		t.Errorf("expected isError: true for nonexistent checkpoint tag, got: %v", resp.Result)
+	}
+
+	// 3. Missing tag_a argument
+	outBuf.Reset()
+	inBuf.Reset()
+	reqMissing := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vessel_checkpoint_diff","arguments":{}}}` + "\n"
+	inBuf.WriteString(reqMissing)
+	_ = server.Serve(ctx)
+
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &resp) != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	resMap, ok = resp.Result.(map[string]any)
+	if !ok || resMap["isError"] != true {
+		t.Errorf("expected isError: true for missing tag_a argument, got: %v", resp.Result)
 	}
 }
