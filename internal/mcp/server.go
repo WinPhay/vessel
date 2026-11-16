@@ -403,6 +403,28 @@ func (s *Server) getToolsList() []Tool {
 			},
 		},
 		{
+			Name:        "vessel_process_wait",
+			Description: "Waits for a background or interactive process to exit (or until timeout expires), returning accumulated stdout/stderr, final exit code, and running state without polling loops.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"process_id": map[string]any{
+						"type":        "string",
+						"description": "Unique identifier of the spawned process.",
+					},
+					"timeout_seconds": map[string]any{
+						"type":        "integer",
+						"description": "Maximum seconds to wait for exit (default: 30, max: 300).",
+					},
+					"max_bytes": map[string]any{
+						"type":        "integer",
+						"description": "Maximum bytes to read from buffer (default: all unread).",
+					},
+				},
+				"required": []string{"process_id"},
+			},
+		},
+		{
 			Name:        "vessel_process_write",
 			Description: "Sends standard input (text/keystrokes) to a running process inside the sandbox container.",
 			InputSchema: map[string]any{
@@ -873,6 +895,42 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 		output, exitCode, running, err := s.sb.ReadProcessOutput(ctx, args.ProcessID, args.MaxBytes)
 		if err != nil {
 			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to read process output: %v", err))
+		}
+
+		res := map[string]any{
+			"process_id":     args.ProcessID,
+			"output":         output,
+			"running":        running,
+			"exit_code":      exitCode,
+			"token_estimate": tokenfilter.EstimateTokens(output),
+		}
+		resPayload, _ := json.MarshalIndent(res, "", "  ")
+		return s.toolSuccessResponse(req.ID, string(resPayload))
+
+	case "vessel_process_wait":
+		var args struct {
+			ProcessID      string `json:"process_id"`
+			TimeoutSeconds int    `json:"timeout_seconds"`
+			MaxBytes       int    `json:"max_bytes"`
+		}
+		if err := json.Unmarshal(callParams.Arguments, &args); err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("invalid arguments for vessel_process_wait: %v", err))
+		}
+		if args.ProcessID == "" {
+			return s.toolErrorResponse(req.ID, "process_id parameter is required")
+		}
+
+		timeout := 30 * time.Second
+		if args.TimeoutSeconds > 0 {
+			if args.TimeoutSeconds > 300 {
+				args.TimeoutSeconds = 300
+			}
+			timeout = time.Duration(args.TimeoutSeconds) * time.Second
+		}
+
+		output, exitCode, running, err := s.sb.WaitProcess(ctx, args.ProcessID, timeout, args.MaxBytes)
+		if err != nil {
+			return s.toolErrorResponse(req.ID, fmt.Sprintf("failed to wait for process: %v", err))
 		}
 
 		res := map[string]any{

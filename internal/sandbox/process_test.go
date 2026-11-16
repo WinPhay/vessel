@@ -277,3 +277,92 @@ func TestProcess_PersonaQA(t *testing.T) {
 		t.Errorf("Tier 4 process should be terminated with exit code, got running=%v, exitCode=%v", running, exitCode)
 	}
 }
+
+func TestProcessManager_WaitOutput(t *testing.T) {
+	pm := NewProcessManager()
+	defer pm.Close()
+
+	ctx := context.Background()
+
+	// 1. Process that exits before wait
+	proc1 := pm.RegisterProcess("quick-exit", false, nil, nil, nil)
+	_, _ = proc1.buf.Write([]byte("quick output\n"))
+	proc1.SetExitCode(0)
+
+	out, code, running, err := pm.WaitOutput(ctx, proc1.ID, 5*time.Second, 0)
+	if err != nil {
+		t.Fatalf("WaitOutput failed: %v", err)
+	}
+	if running || code == nil || *code != 0 || !strings.Contains(out, "quick output") {
+		t.Errorf("unexpected wait result: running=%v, code=%v, out=%q", running, code, out)
+	}
+
+	// 2. Process that exits asynchronously
+	proc2 := pm.RegisterProcess("async-exit", false, nil, nil, nil)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = proc2.buf.Write([]byte("async done\n"))
+		proc2.SetExitCode(42)
+	}()
+
+	start := time.Now()
+	out, code, running, err = pm.WaitOutput(ctx, proc2.ID, 2*time.Second, 0)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("async WaitOutput failed: %v", err)
+	}
+	if running || code == nil || *code != 42 || !strings.Contains(out, "async done") {
+		t.Errorf("unexpected async wait result: running=%v, code=%v, out=%q", running, code, out)
+	}
+	if elapsed < 40*time.Millisecond {
+		t.Errorf("expected wait to block until exit, but took only %v", elapsed)
+	}
+
+	// 3. Process that times out while running
+	proc3 := pm.RegisterProcess("long-running", false, nil, nil, nil)
+	_, _ = proc3.buf.Write([]byte("partial log 1\n"))
+
+	out, code, running, err = pm.WaitOutput(ctx, proc3.ID, 50*time.Millisecond, 0)
+	if err != nil {
+		t.Fatalf("timeout WaitOutput failed: %v", err)
+	}
+	if !running || code != nil || !strings.Contains(out, "partial log 1") {
+		t.Errorf("expected still running after timeout: running=%v, code=%v, out=%q", running, code, out)
+	}
+
+	// 4. Non-existent process
+	_, _, _, err = pm.WaitOutput(ctx, "non-existent-proc", time.Second, 0)
+	if err == nil {
+		t.Errorf("expected error for non-existent process")
+	}
+}
+
+func TestMockSandbox_WaitProcess(t *testing.T) {
+	mockSB := NewMockSandbox()
+	defer mockSB.Close()
+
+	ctx := context.Background()
+	info, err := mockSB.StartProcess(ctx, "test-build", false, 24, 80)
+	if err != nil {
+		t.Fatalf("StartProcess failed: %v", err)
+	}
+
+	proc, err := mockSB.procMgr.GetProcess(info.ID)
+	if err != nil {
+		t.Fatalf("GetProcess failed: %v", err)
+	}
+	_, _ = proc.buf.Write([]byte("compiling...\n"))
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_, _ = proc.buf.Write([]byte("build success\n"))
+		proc.SetExitCode(0)
+	}()
+
+	out, code, running, err := mockSB.WaitProcess(ctx, info.ID, 2*time.Second, 0)
+	if err != nil {
+		t.Fatalf("WaitProcess failed: %v", err)
+	}
+	if running || code == nil || *code != 0 || !strings.Contains(out, "build success") {
+		t.Errorf("unexpected WaitProcess result: running=%v, code=%v, out=%q", running, code, out)
+	}
+}

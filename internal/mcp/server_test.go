@@ -80,8 +80,8 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	}
 	toolsMap := resp2.Result.(map[string]any)
 	toolsList := toolsMap["tools"].([]any)
-	if len(toolsList) != 22 {
-		t.Errorf("expected 22 registered tools, got %d", len(toolsList))
+	if len(toolsList) != 23 {
+		t.Errorf("expected 23 registered tools, got %d", len(toolsList))
 	}
 
 	// Verify vessel_exec response
@@ -261,6 +261,24 @@ func TestMCPServerProcessTools(t *testing.T) {
 	line, _ = outBuf.ReadString('\n')
 	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &respOutput); err != nil || respOutput.Error != nil {
 		t.Fatalf("vessel_process_output failed: %v", respOutput.Error)
+	}
+
+	// 3b. Wait on process
+	outBuf.Reset()
+	inBuf.Reset()
+	reqWait := `{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"vessel_process_wait","arguments":{"process_id":"` + info.ID + `","timeout_seconds":1}}}` + "\n"
+	inBuf.WriteString(reqWait)
+	_ = server.Serve(ctx)
+
+	var respWait JSONRPCResponse
+	line, err = outBuf.ReadString('\n')
+	if err != nil || json.Unmarshal([]byte(strings.TrimSpace(line)), &respWait) != nil || respWait.Error != nil {
+		t.Fatalf("vessel_process_wait failed: line=%s, err=%v", line, respWait.Error)
+	}
+	waitMap := respWait.Result.(map[string]any)
+	waitContent := waitMap["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(waitContent, info.ID) {
+		t.Errorf("expected process_id in wait response, got: %s", waitContent)
 	}
 
 	// 4. Kill process

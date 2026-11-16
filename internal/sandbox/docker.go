@@ -711,19 +711,14 @@ func (d *DockerSandbox) StartProcess(ctx context.Context, cmd string, isPTY bool
 			_, _ = stdcopy.StdCopy(proc.buf, proc.buf, attachResp.Reader)
 		}
 
-		proc.mu.Lock()
-		proc.Running = false
-		proc.mu.Unlock()
-
 		// Inspect exit code
 		inspectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		inspect, err := d.cli.ContainerExecInspect(inspectCtx, execCreateResp.ID)
 		if err == nil {
-			proc.mu.Lock()
-			code := inspect.ExitCode
-			proc.ExitCode = &code
-			proc.mu.Unlock()
+			proc.SetExitCode(inspect.ExitCode)
+		} else {
+			proc.CloseDone()
 		}
 		_ = procCtx
 	}()
@@ -751,6 +746,29 @@ func (d *DockerSandbox) ReadProcessOutput(ctx context.Context, id string, maxByt
 	out, code, running, err := d.procMgr.ReadOutput(id, maxBytes)
 	if err == nil && budgetMgr != nil && out != "" {
 		_ = budgetMgr.RecordTokens(tokenfilter.EstimateTokens(out))
+	}
+	return out, code, running, err
+}
+
+// WaitProcess blocks until a managed process exits or the timeout/context expires.
+func (d *DockerSandbox) WaitProcess(ctx context.Context, id string, timeout time.Duration, maxBytes int) (string, *int, bool, error) {
+	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return "", nil, false, ErrSandboxClosed
+	}
+	budgetMgr := d.budgetMgr
+	d.mu.RUnlock()
+
+	start := time.Now()
+	out, code, running, err := d.procMgr.WaitOutput(ctx, id, timeout, maxBytes)
+	elapsed := time.Since(start)
+
+	if err == nil && budgetMgr != nil {
+		_ = budgetMgr.RecordDuration(elapsed)
+		if out != "" {
+			_ = budgetMgr.RecordTokens(tokenfilter.EstimateTokens(out))
+		}
 	}
 	return out, code, running, err
 }

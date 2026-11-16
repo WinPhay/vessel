@@ -88,11 +88,34 @@ type ManagedProcess struct {
 	Running   bool
 	ExitCode  *int
 
-	mu     sync.Mutex
-	buf    *RingBuffer
-	stdin  io.WriteCloser
-	cancel context.CancelFunc
-	onKill func() error
+	mu       sync.Mutex
+	buf      *RingBuffer
+	stdin    io.WriteCloser
+	cancel   context.CancelFunc
+	onKill   func() error
+	done     chan struct{}
+	doneOnce sync.Once
+}
+
+// SetExitCode records the final process exit code, marks the process as stopped, and closes the done channel.
+func (p *ManagedProcess) SetExitCode(exitCode int) {
+	p.mu.Lock()
+	p.Running = false
+	p.ExitCode = &exitCode
+	p.mu.Unlock()
+	p.doneOnce.Do(func() {
+		close(p.done)
+	})
+}
+
+// CloseDone signals completion if the process exited without an explicit exit code.
+func (p *ManagedProcess) CloseDone() {
+	p.mu.Lock()
+	p.Running = false
+	p.mu.Unlock()
+	p.doneOnce.Do(func() {
+		close(p.done)
+	})
 }
 
 // ProcessManager manages the lifecycle of background and interactive processes.
@@ -126,6 +149,7 @@ func (pm *ProcessManager) RegisterProcess(cmd string, isPTY bool, stdin io.Write
 		stdin:     stdin,
 		cancel:    cancel,
 		onKill:    onKill,
+		done:      make(chan struct{}),
 	}
 
 	pm.processes[id] = proc
@@ -213,6 +237,9 @@ func (pm *ProcessManager) Kill(id string, signal string) error {
 	if proc.onKill != nil {
 		_ = proc.onKill()
 	}
+	proc.doneOnce.Do(func() {
+		close(proc.done)
+	})
 
 	return nil
 }
@@ -269,8 +296,53 @@ func (pm *ProcessManager) Close() error {
 			if p.onKill != nil {
 				_ = p.onKill()
 			}
+			p.doneOnce.Do(func() {
+				close(p.done)
+			})
 		}
 		p.mu.Unlock()
 	}
 	return nil
+}
+
+// WaitOutput blocks until the process exits or the timeout/context expires.
+// Returns accumulated unread output, final exit code (if exited), running state, and any error.
+func (pm *ProcessManager) WaitOutput(ctx context.Context, id string, timeout time.Duration, maxBytes int) (string, *int, bool, error) {
+	proc, err := pm.GetProcess(id)
+	if err != nil {
+		return "", nil, false, err
+	}
+
+	// Check if already exited
+	proc.mu.Lock()
+	running := proc.Running
+	proc.mu.Unlock()
+
+	if running {
+		var timer *time.Timer
+		var timerCh <-chan time.Time
+		if timeout > 0 {
+			timer = time.NewTimer(timeout)
+			defer timer.Stop()
+			timerCh = timer.C
+		}
+
+		select {
+		case <-proc.done:
+			// Process terminated
+		case <-timerCh:
+			// Timeout elapsed; return whatever is available
+		case <-ctx.Done():
+			return "", nil, proc.Running, ctx.Err()
+		}
+	}
+
+	proc.mu.Lock()
+	rawBytes := proc.buf.ReadUnread(maxBytes)
+	exitCode := proc.ExitCode
+	running = proc.Running
+	proc.mu.Unlock()
+
+	cleaned := tokenfilter.CleanOutput(string(rawBytes))
+	return cleaned, exitCode, running, nil
 }

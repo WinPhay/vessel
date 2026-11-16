@@ -43,6 +43,7 @@ type Sandbox interface {
 	// Process management methods
 	StartProcess(ctx context.Context, cmd string, pty bool, rows, cols int) (*ProcessInfo, error)
 	ReadProcessOutput(ctx context.Context, id string, maxBytes int) (string, *int, bool, error)
+	WaitProcess(ctx context.Context, id string, timeout time.Duration, maxBytes int) (string, *int, bool, error)
 	WriteProcessInput(ctx context.Context, id string, input string) (int, error)
 	KillProcess(ctx context.Context, id string, signal string) error
 	ListProcesses(ctx context.Context) ([]*ProcessInfo, error)
@@ -277,6 +278,13 @@ func (m *MockSandbox) ReadProcessOutput(ctx context.Context, id string, maxBytes
 		return "", nil, false, ErrSandboxClosed
 	}
 	return m.procMgr.ReadOutput(id, maxBytes)
+}
+
+func (m *MockSandbox) WaitProcess(ctx context.Context, id string, timeout time.Duration, maxBytes int) (string, *int, bool, error) {
+	if m.closed {
+		return "", nil, false, ErrSandboxClosed
+	}
+	return m.procMgr.WaitOutput(ctx, id, timeout, maxBytes)
 }
 
 func (m *MockSandbox) WriteProcessInput(ctx context.Context, id string, input string) (int, error) {

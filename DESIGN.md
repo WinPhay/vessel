@@ -40,7 +40,7 @@ Host Environment (Developer Workstation)
 
 ## 4. MCP Tool Surface Contract
 
-Vessel exposes 22 core tools over the Model Context Protocol:
+Vessel exposes 23 core tools over the Model Context Protocol:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
@@ -56,13 +56,14 @@ Vessel exposes 22 core tools over the Model Context Protocol:
 | `vessel_extract_page` | `url: string` | Extracts structured interactive affordances (headings, links, inputs, buttons) as JSON. |
 | `vessel_start_process` | `command: string`, `pty?: bool`, `rows?: int`, `cols?: int` | Spawns background or interactive process inside container jail; returns unique `process_id`. |
 | `vessel_process_output` | `process_id: string`, `max_bytes?: int` | Reads unread stdout/stderr from process ring buffer with token estimation. |
+| `vessel_process_wait` | `process_id: string`, `timeout_seconds?: int`, `max_bytes?: int` | Blocks until process exits or timeout expires; returns exit code, running state, and consolidated output without polling loops. |
 | `vessel_process_write` | `process_id: string`, `input: string` | Writes standard input (keystrokes, commands, confirmation) into active process stdin. |
 | `vessel_kill_process` | `process_id: string`, `signal?: string` | Sends termination signal (SIGTERM/SIGKILL) to stop a background process. |
 | `vessel_grep` | `pattern: string`, `path?: string`, `file_pattern?: string`, `max_matches?: int`, `case_sensitive?: bool` | Fast regex and substring search across workspace files with token estimates. |
 | `vessel_apply_patch` | `patch: string`, `dry_run?: bool` | Applies a unified diff patch atomically to a target file in the workspace sandbox. |
-| `vessel_spawn_service` | `name: string`, `image: string`, `env?: object`, `command?: string` | Spawns an isolated sidecar container on the session network; reachable via internal DNS `name:port`. |
+| `vessel_spawn_service` | `name: string`, `image: string`, `env?: object`, `command?: string`, `ports?: string[]` | Spawns an isolated sidecar container on the session network with optional localhost port forwarding. |
 | `vessel_stop_service` | `name: string` | Stops and removes an active sidecar service from the session mesh. |
-| `vessel_list_services` | *(none)* | Returns status, image, uptime, and hostnames for all active sidecars. |
+| `vessel_list_services` | *(none)* | Returns status, image, uptime, hostnames, and active port bindings for all active sidecars. |
 | `vessel_worktree_status` | *(none)* | Returns Git worktree status, current branch, base branch, modified and untracked file lists. |
 | `vessel_worktree_diff` | `max_bytes?: int` | Returns unified diff against HEAD within the isolated worktree, token estimate, and file change metrics. |
 | `vessel_worktree_commit` | `message: string`, `author_name?: string`, `author_email?: string` | Stages all changes and commits them within the session worktree branch with custom or default author metadata. |
