@@ -679,6 +679,14 @@ func (s *Server) handleToolCall(ctx context.Context, req *JSONRPCRequest) *JSONR
 				statusData["reconnected"] = sessProvider.IsReconnected()
 			}
 		}
+		if budgetProvider, ok := s.sb.(interface {
+			Budget() sandbox.BudgetSnapshot
+		}); ok {
+			b := budgetProvider.Budget()
+			if b.MaxTokens > 0 || b.MaxDuration > 0 || b.CumulativeTokens > 0 {
+				statusData["budget"] = b
+			}
+		}
 		payload, _ := json.MarshalIndent(statusData, "", "  ")
 		return s.toolSuccessResponse(req.ID, string(payload))
 

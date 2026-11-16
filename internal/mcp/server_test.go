@@ -513,3 +513,53 @@ func TestServer_SessionStatusReporting(t *testing.T) {
 		t.Errorf("expected reconnected: true in status output, got: %s", text)
 	}
 }
+
+func TestServer_BudgetReporting(t *testing.T) {
+	mockSB := sandbox.NewMockSandbox()
+	bm := sandbox.NewBudgetMonitor(sandbox.BudgetConfig{
+		MaxTokens: 25000,
+	})
+	_ = bm.RecordTokens(1500)
+	mockSB.SetBudgetMonitor(bm)
+
+	var inBuf bytes.Buffer
+	var outBuf bytes.Buffer
+
+	server := NewServer(mockSB, "/tmp/workspace", &inBuf, &outBuf)
+	reqStatus := `{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"vessel_status","arguments":{}}}` + "\n"
+	inBuf.WriteString(reqStatus)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := server.Serve(ctx); err != nil {
+		t.Fatalf("serve error: %v", err)
+	}
+
+	line, err := outBuf.ReadString('\n')
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+
+	var resp JSONRPCResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error on vessel_status: %v", resp.Error)
+	}
+
+	statusMap := resp.Result.(map[string]any)
+	content := statusMap["content"].([]any)
+	text := content[0].(map[string]any)["text"].(string)
+
+	if !strings.Contains(text, "budget") {
+		t.Errorf("expected budget section in status output, got: %s", text)
+	}
+	if !strings.Contains(text, `"max_tokens": 25000`) {
+		t.Errorf("expected max_tokens: 25000 in status output, got: %s", text)
+	}
+	if !strings.Contains(text, `"cumulative_tokens": 1500`) {
+		t.Errorf("expected cumulative_tokens: 1500 in status output, got: %s", text)
+	}
+}

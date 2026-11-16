@@ -113,6 +113,8 @@ func runExec(args []string) {
 	maskSecrets := execFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	session := execFlags.String("session", "", "Named session ID for reconnect and persistence")
 	persist := execFlags.Bool("persist", false, "Persist container, worktree, and service mesh across runs")
+	maxTokens := execFlags.Int64("max-tokens", 0, "Max cumulative tokens permitted for session before tripping circuit breaker (0 = unlimited)")
+	maxDuration := execFlags.String("max-duration", "", "Max cumulative execution duration (e.g. '30s', '5m', '1h'; default: unlimited)")
 	_ = parseInterspersed(execFlags, args)
 
 	remaining := execFlags.Args()
@@ -139,6 +141,17 @@ func runExec(args []string) {
 	}
 	if *persist {
 		cfg.Persistent = true
+	}
+	if *maxTokens > 0 {
+		cfg.MaxTokens = *maxTokens
+	}
+	if *maxDuration != "" {
+		d, err := sandbox.ParseDurationString(*maxDuration)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid --max-duration: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.MaxDuration = d
 	}
 	if *image != "" {
 		cfg.ImageName = *image
@@ -231,6 +244,8 @@ func runMCP(args []string) {
 	maskSecrets := mcpFlags.Bool("mask-secrets", true, "Enable automatic secret redaction and masking")
 	session := mcpFlags.String("session", "", "Named session ID for reconnect and persistence")
 	persist := mcpFlags.Bool("persist", false, "Persist container, worktree, and service mesh across runs")
+	maxTokens := mcpFlags.Int64("max-tokens", 0, "Max cumulative tokens permitted for session before tripping circuit breaker (0 = unlimited)")
+	maxDuration := mcpFlags.String("max-duration", "", "Max cumulative execution duration (e.g. '30s', '5m', '1h'; default: unlimited)")
 	useMock := mcpFlags.Bool("mock", false, "Run in mock sandbox mode (for testing without Docker)")
 	_ = parseInterspersed(mcpFlags, args)
 
@@ -251,6 +266,17 @@ func runMCP(args []string) {
 	}
 	if *persist {
 		cfg.Persistent = true
+	}
+	if *maxTokens > 0 {
+		cfg.MaxTokens = *maxTokens
+	}
+	if *maxDuration != "" {
+		d, err := sandbox.ParseDurationString(*maxDuration)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid --max-duration: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.MaxDuration = d
 	}
 	if *image != "" {
 		cfg.ImageName = *image
@@ -943,4 +969,8 @@ func printUsage() {
 	fmt.Println("Session Persistence:")
 	fmt.Println("  --session       Attach to or create a named persistent session (e.g. '--session my-project')")
 	fmt.Println("  --persist       Keep container, worktree, and service mesh alive upon CLI exit for subsequent reconnect")
+	fmt.Println()
+	fmt.Println("Budget & Circuit Breakers:")
+	fmt.Println("  --max-tokens    Max cumulative tokens permitted before tripping circuit breaker (e.g. '--max-tokens 50000')")
+	fmt.Println("  --max-duration  Max cumulative execution duration before tripping circuit breaker (e.g. '--max-duration 15m')")
 }

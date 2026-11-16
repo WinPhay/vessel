@@ -71,6 +71,7 @@ type MockSandbox struct {
 	sessionID   string
 	persistent  bool
 	reconnected bool
+	budgetMgr   *BudgetMonitor
 }
 
 func (m *MockSandbox) SessionID() string   { return m.sessionID }
@@ -80,6 +81,15 @@ func (m *MockSandbox) SetSessionInfo(id string, persistent, reconnected bool) {
 	m.sessionID = id
 	m.persistent = persistent
 	m.reconnected = reconnected
+}
+func (m *MockSandbox) Budget() BudgetSnapshot {
+	if m.budgetMgr != nil {
+		return m.budgetMgr.Snapshot()
+	}
+	return BudgetSnapshot{}
+}
+func (m *MockSandbox) SetBudgetMonitor(bm *BudgetMonitor) {
+	m.budgetMgr = bm
 }
 
 // NewMockSandbox creates an initialized MockSandbox.

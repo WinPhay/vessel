@@ -34,6 +34,8 @@ type DockerSandboxConfig struct {
 	UseWorktree   bool              // Isolate session inside an ephemeral Git worktree
 	SessionID     string            // Named session ID for persistence and reconnect
 	Persistent    bool              // If true, do not destroy container, worktree, and service mesh on Close()
+	MaxTokens     int64             // Cumulative token limit before tripping circuit breaker (0 = unlimited)
+	MaxDuration   time.Duration     // Cumulative execution wall-clock time limit (0 = unlimited)
 }
 
 // DockerSandbox manages an isolated execution container via the Docker Engine API.
@@ -47,6 +49,7 @@ type DockerSandbox struct {
 	procMgr     *ProcessManager
 	svcMgr      *ServiceManager
 	wtMgr       *WorktreeManager
+	budgetMgr   *BudgetMonitor
 	closed      bool
 	reconnected bool
 }
@@ -257,6 +260,11 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		svcMgr.SetPersistent(true)
 	}
 
+	budgetMgr := NewBudgetMonitor(BudgetConfig{
+		MaxTokens:   cfg.MaxTokens,
+		MaxDuration: cfg.MaxDuration,
+	})
+
 	return &DockerSandbox{
 		cli:         cli,
 		containerID: containerID,
@@ -266,6 +274,7 @@ func NewDockerSandbox(ctx context.Context, cfg DockerSandboxConfig, cli client.C
 		procMgr:     NewProcessManager(),
 		svcMgr:      svcMgr,
 		wtMgr:       wtMgr,
+		budgetMgr:   budgetMgr,
 		reconnected: reconnected,
 	}, nil
 }
@@ -340,7 +349,14 @@ func (d *DockerSandbox) Exec(ctx context.Context, cmd string) (*ExecResult, erro
 		return nil, ErrSandboxClosed
 	}
 	containerID := d.containerID
+	budgetMgr := d.budgetMgr
 	d.mu.RUnlock()
+
+	if budgetMgr != nil {
+		if err := budgetMgr.Check(); err != nil {
+			return nil, err
+		}
+	}
 
 	start := time.Now()
 
@@ -390,12 +406,18 @@ func (d *DockerSandbox) Exec(ctx context.Context, cmd string) (*ExecResult, erro
 	}
 
 	totalTokens := tokenfilter.EstimateTokens(cleanStdout) + tokenfilter.EstimateTokens(cleanStderr)
+	duration := time.Since(start)
+
+	if budgetMgr != nil {
+		_ = budgetMgr.RecordDuration(duration)
+		_ = budgetMgr.RecordTokens(totalTokens)
+	}
 
 	return &ExecResult{
 		ExitCode:      inspectResp.ExitCode,
 		Stdout:        cleanStdout,
 		Stderr:        cleanStderr,
-		Duration:      time.Since(start),
+		Duration:      duration,
 		TokenEstimate: totalTokens,
 		Truncated:     truncated,
 	}, nil
@@ -569,14 +591,24 @@ func (d *DockerSandbox) WorktreeStatus(ctx context.Context) (*WorktreeStatusResu
 func (d *DockerSandbox) WorktreeDiff(ctx context.Context, maxBytes int) (*WorktreeDiffResult, error) {
 	d.mu.RLock()
 	closed := d.closed
+	budgetMgr := d.budgetMgr
 	d.mu.RUnlock()
 	if closed {
 		return nil, ErrSandboxClosed
 	}
+	if budgetMgr != nil {
+		if err := budgetMgr.Check(); err != nil {
+			return nil, err
+		}
+	}
 	if d.wtMgr == nil {
 		return &WorktreeDiffResult{Diff: "", TokenEstimate: 0}, nil
 	}
-	return d.wtMgr.Diff(ctx, maxBytes)
+	res, err := d.wtMgr.Diff(ctx, maxBytes)
+	if err == nil && budgetMgr != nil && res != nil {
+		_ = budgetMgr.RecordTokens(res.TokenEstimate)
+	}
+	return res, err
 }
 
 // WorktreeCommit commits changes staged in the worktree.
@@ -713,8 +745,14 @@ func (d *DockerSandbox) ReadProcessOutput(ctx context.Context, id string, maxByt
 		d.mu.RUnlock()
 		return "", nil, false, ErrSandboxClosed
 	}
+	budgetMgr := d.budgetMgr
 	d.mu.RUnlock()
-	return d.procMgr.ReadOutput(id, maxBytes)
+
+	out, code, running, err := d.procMgr.ReadOutput(id, maxBytes)
+	if err == nil && budgetMgr != nil && out != "" {
+		_ = budgetMgr.RecordTokens(tokenfilter.EstimateTokens(out))
+	}
+	return out, code, running, err
 }
 
 // WriteProcessInput writes text into a managed process's stdin.
@@ -748,4 +786,15 @@ func (d *DockerSandbox) ListProcesses(ctx context.Context) ([]*ProcessInfo, erro
 	}
 	d.mu.RUnlock()
 	return d.procMgr.List(), nil
+}
+
+// Budget returns the point-in-time telemetry snapshot of the budget monitor.
+func (d *DockerSandbox) Budget() BudgetSnapshot {
+	d.mu.RLock()
+	budgetMgr := d.budgetMgr
+	d.mu.RUnlock()
+	if budgetMgr != nil {
+		return budgetMgr.Snapshot()
+	}
+	return BudgetSnapshot{}
 }
