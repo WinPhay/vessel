@@ -1,6 +1,7 @@
 # Vessel
 
 [![CI](https://github.com/WinPhay/vessel/actions/workflows/ci.yml/badge.svg)](https://github.com/WinPhay/vessel/actions/workflows/ci.yml)
+[![Publish Agent Images](https://github.com/WinPhay/vessel/actions/workflows/docker.yml/badge.svg)](https://github.com/WinPhay/vessel/actions/workflows/docker.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 > **The local, time-traveling sandbox engine for autonomous AI agents.**
@@ -34,6 +35,18 @@ If you are an AI assistant or coding agent working in this repository, see [`AGE
 Install the latest pre-compiled static binary for your OS and CPU architecture (Linux/macOS/Windows, amd64/arm64):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/WinPhay/vessel/main/scripts/install.sh | bash
+```
+
+### Pre-Built AgentOS Images (GHCR)
+Vessel publishes official multi-architecture (`linux/amd64`, `linux/arm64`) agent images to GitHub Container Registry:
+```bash
+# Pull official pre-baked images
+docker pull ghcr.io/winphay/vessel-agent:alpine   # Lightweight base (default)
+docker pull ghcr.io/winphay/vessel-agent:ubuntu   # Full developer toolchain
+docker pull ghcr.io/winphay/vessel-agent:browser  # Headless Chromium agent
+
+# Or build locally using scripts/build-images.sh
+./scripts/build-images.sh all
 ```
 
 ### Build from Source

@@ -2,57 +2,76 @@
 set -euo pipefail
 
 # Build standard Vessel AgentOS images
-# Usage: ./scripts/build-images.sh [alpine|ubuntu|browser|all]
+# Usage: ./scripts/build-images.sh [alpine|ubuntu|browser|all] [--registry <registry>]
 
-TARGET="${1:-all}"
+TARGET="all"
+REGISTRY="${REGISTRY:-}"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        alpine|ubuntu|browser|all)
+            TARGET="$1"
+            shift
+            ;;
+        --registry|-r)
+            REGISTRY="$2"
+            shift 2
+            ;;
+        *)
+            echo "Usage: $0 [alpine|ubuntu|browser|all] [--registry <registry>]"
+            exit 1
+            ;;
+    esac
+done
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-build_alpine() {
-    echo "==> Building vessel-agent:alpine..."
-    docker build \
-        -t vessel-agent:alpine \
-        -t vessel-agent:latest \
-        -f "${ROOT_DIR}/configs/Dockerfile.alpine-agent" \
-        "${ROOT_DIR}/configs"
-    echo "==> Successfully built vessel-agent:alpine"
-}
+# Helper function to invoke docker build with optional registry tag prefix
+build_image() {
+    local flavor="$1"
+    local dockerfile="$2"
+    local extra_tags=()
 
-build_ubuntu() {
-    echo "==> Building vessel-agent:ubuntu..."
-    docker build \
-        -t vessel-agent:ubuntu \
-        -f "${ROOT_DIR}/configs/Dockerfile.ubuntu-agent" \
-        "${ROOT_DIR}/configs"
-    echo "==> Successfully built vessel-agent:ubuntu"
-}
+    echo "==> Building vessel-agent:${flavor}..."
 
-build_browser() {
-    echo "==> Building vessel-agent:browser..."
+    # Always tag locally as vessel-agent:<flavor>
+    extra_tags+=(-t "vessel-agent:${flavor}")
+
+    if [[ "${flavor}" == "alpine" ]]; then
+        extra_tags+=(-t "vessel-agent:latest")
+    fi
+
+    # If registry prefix is specified, tag with registry prefix
+    if [[ -n "${REGISTRY}" ]]; then
+        local clean_registry="${REGISTRY%/}"
+        extra_tags+=(-t "${clean_registry}/vessel-agent:${flavor}")
+        if [[ "${flavor}" == "alpine" ]]; then
+            extra_tags+=(-t "${clean_registry}/vessel-agent:latest")
+        fi
+    fi
+
     docker build \
-        -t vessel-agent:browser \
-        -f "${ROOT_DIR}/configs/Dockerfile.browser-agent" \
+        "${extra_tags[@]}" \
+        -f "${ROOT_DIR}/configs/${dockerfile}" \
         "${ROOT_DIR}/configs"
-    echo "==> Successfully built vessel-agent:browser"
+
+    echo "==> Successfully built vessel-agent:${flavor}"
 }
 
 case "${TARGET}" in
     alpine)
-        build_alpine
+        build_image "alpine" "Dockerfile.alpine-agent"
         ;;
     ubuntu)
-        build_ubuntu
+        build_image "ubuntu" "Dockerfile.ubuntu-agent"
         ;;
     browser)
-        build_browser
+        build_image "browser" "Dockerfile.browser-agent"
         ;;
     all)
-        build_alpine
-        build_ubuntu
-        build_browser
-        ;;
-    *)
-        echo "Usage: $0 [alpine|ubuntu|browser|all]"
-        exit 1
+        build_image "alpine" "Dockerfile.alpine-agent"
+        build_image "ubuntu" "Dockerfile.ubuntu-agent"
+        build_image "browser" "Dockerfile.browser-agent"
         ;;
 esac
