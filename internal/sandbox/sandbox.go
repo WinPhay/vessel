@@ -82,7 +82,7 @@ type MockSandbox struct {
 	policy      *PathPolicy
 }
 
-func (m *MockSandbox) Policy() *PathPolicy { return m.policy }
+func (m *MockSandbox) Policy() *PathPolicy     { return m.policy }
 func (m *MockSandbox) SetPolicy(p *PathPolicy) { m.policy = p }
 
 func (m *MockSandbox) SessionID() string   { return m.sessionID }
